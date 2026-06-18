@@ -1,0 +1,145 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(APP_DIR)
+TEMP_DIR = os.path.join(BASE_DIR, "temp_data")
+
+APP_DEBUG = os.getenv("APP_DEBUG", "false").lower() == "true"
+
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
+
+API_KEY = os.getenv("API_KEY")
+
+CACHE_TTL_SECONDS = 300
+
+VENDOR_TYPE = "VENDOR"
+ALLOW_TERMINAL_VENDOR = True
+ALLOW_TERMINAL_MILL = True
+ALLOW_CPO_TOLLING = True
+PRIORITIZE_VENDOR_DEBUG = False
+
+MIN_TXN_FOR_EXACT = 3
+MIN_ACTIVE_DAYS_FOR_EXACT = 3
+FORECAST_TARGET_DAYS = 15
+MIN_ALLOCATED_SHARE_PER_SUPPLIER = 0.005
+ENABLE_QUEUE_SCHEDULING = True
+
+def get_dynamic_min_allocated_share(demand_qty: float) -> float:
+    demand_qty = float(demand_qty or 0.0)
+    if demand_qty <= 1_000_000:
+        return 0.05
+
+    if demand_qty <= 3_000_000:
+        return 0.03
+
+    if demand_qty <= 5_000_000:
+        return 0.02
+
+    return 0.02
+
+process_map = {
+    "CPO": "FFB",
+    "PK": "FFB",
+    "PKO": "PK",
+    "RBDPO": "CPO",
+    "RBDPKO": "PKO",
+    "RBDOLN": "RBDPO",
+    "RBDST": "RBDPO",
+    "RBDPS": "RBDPO",
+    "PFAD": "RBDPO",
+}
+
+conversion_map = {
+    "CPO": 0.20,
+    "PK": 0.05,
+    "PKO": 0.45,
+    "RBDPO": 0.94,
+    "RBDPKO": 0.95,
+    "RBDOLN": 0.77,
+    "RBDST": 0.18,
+    "RBDPS": 0.98,
+    "PFAD": 0.05,
+}
+
+REFINED_PRODUCTS = ["RBDPO", "RBDPKO", "RBDOLN", "RBDST", "RBDPS", "PFAD"]
+DIRECT_REFINERY_PRODUCTS = {"CPO", "PKO"}
+DIRECT_PRODUCT_EMPTY_FALLBACK = {"PKO": "PK"}
+VENDOR_PARTNER_PCA_PRODUCTS = {"CPO", "PKO", "PK"}
+
+REFINERIES_WITH_KCP = {
+    "Tarjun Refinery",
+    "Lampung Refinery",
+    "Belawan Refinery",
+}
+
+PASS_THROUGH_TYPES = {"BULKING", "TRADING"}
+
+DEFAULT_LEAD_DAYS_BY_TYPE = {
+    "ESTATE_TO_MILL": 1.0,
+    "MILL": 1.0,
+    "KCP": 1.0,
+    "BULKING": 1.0,
+    "TRADING": 1.0,
+    "VENDOR": 1.0,
+    "REFINERY_GROUP": 1.0,
+    "UNKNOWN": 1.0,
+}
+
+DEFAULT_THROUGHPUT_TPD_BY_PRODUCT = {
+    "FFB": 150.0,
+    "CPO": 120.0,
+    "PK": 80.0,
+    "PKO": 70.0,
+    "RBDPO": 100.0,
+    "RBDPKO": 70.0,
+    "RBDOLN": 90.0,
+    "RBDST": 90.0,
+    "RBDPS": 90.0,
+    "PFAD": 60.0,
+}
+
+facility_groups = {
+    "Lubuk Gaung Refinery": [
+        "R113", "R11X", "R21X", "R213", "T112", "T113", "T116", "T118", 
+        "T153", "T154", "T155", "T156", "T157", "T159", "T170", "T171", 
+        "T174", "T175", "T176", "T177", "T190", "T193", "T195", "T197", 
+        "T251", "T253", "T259", "T270", "T274", "T276", "T277", "T291", 
+        "T293", "T151", "T152", "T172", "T173", "T213", "T21X",
+    ],
+    "Lampung Refinery": [
+        "T114", "T117", "T119", "T179", "T192", "T196", "T211", "T21Y",
+        "T234", "T235", "T236", "T237", "T279", "T292", "T31Y", "R114", 
+        "R21Y", "R31Y",
+    ],
+    "Marunda Refinery": [
+        "RJKT", "T120", "T127", "T128", "T129", "T180", "T182", "T227",
+        "T282", "F120", "F320", "R320", "R120", "R520", "R521", "1P72",
+    ],
+    "Belawan Refinery": [
+        "T115", "T153", "T170", "T198", "T210", "T214", "T215", "T253",
+        "T270", "T21Z", "T31Z", "F11Z", "F110", "F51Z", "R11Z", "R21Z",
+        "R31Z", "RMDN", "RMD2", "RMDT",
+    ],
+    "Tarjun Refinery": [
+        "T130", "T132", "T133", "T134", "T135", "T138", "T13Z", "T216",
+        "T230", "T232", "T233", "T238", "T23Z", "T53Z", "R13Z", "R23Z", 
+        "R53Z", "R23Y",
+    ],
+    "Surabaya Refinery": [  
+        "T126", "T181", "T183", "F124", "RSBT", "RSBY", "R124",
+    ],
+}
+
+#example only to test the no buy list filtering
+buyer_blacklist = {
+    "AAK USA INC. - LE": ["1950"],
+    "BASF PERSONAL CARE AND NUTRITION GMBH - LE": ["2050"],
+    "GOLDEN AGRI-RESOURCES EUROPE B.V.": ["INDA", "STPA"],
+    "PAVLOS N PETTAS SA - LE": ["1925", "1926"],
+}
