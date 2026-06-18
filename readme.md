@@ -41,6 +41,8 @@ node_modules/
 __pycache__/
 ```
 
+Untuk folder temp_data yang perlu diletakkan pada backend -> /backend/temp_data -> dapat didownload pada link: https://drive.google.com/drive/folders/1IF2N68c-bCimWUCS0fpoNTDrAKWWXSV0?usp=sharing
+
 ---
 
 ## 2. Persiapan Backend
