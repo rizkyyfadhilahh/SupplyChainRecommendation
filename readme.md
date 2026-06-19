@@ -11,6 +11,7 @@ project_refactor/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py
+│   │   ├── middleware.py
 │   │   ├── config.py
 │   │   ├── data_loader.py
 │   │   ├── schemas.py
@@ -36,6 +37,7 @@ Folder berikut memang tidak disertakan dan harus dibuat/install ulang di masing-
 
 ```txt
 venv/
+frontend/.env.local
 node_modules/
 .next/
 __pycache__/
