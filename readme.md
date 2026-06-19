@@ -18,6 +18,7 @@ project_refactor/
 │   │   ├── utils.py
 │   │   ├── repositories/
 │   │   └── services/
+            └── trace/
 │   │
 │   ├── temp_data/
 │   ├── requirements.txt
