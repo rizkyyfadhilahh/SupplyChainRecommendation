@@ -1,7 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
+import { useRouter } from "next/navigation"
 import GapTrendIndicator from "./gap-analysis/GapTrendIndicatorSafe"
+import DummyDataBadge from "./shared/DummyDataBadge"
 
 /* ── Primitive components ─────────────────────────────────────── */
 function Card({ children, className = "" }) {
@@ -62,18 +64,30 @@ function Stat({ label, value, sub, bg = "bg-white" }) {
    ───────────────────────────────────────────────────────────────── */
 function BuyerSidebar({ selectedBuyer, onSelect, facility, onFacilityChange, onRerun }) {
   const [buyers, setBuyers] = useState([])
+  const [facilities, setFacilities] = useState([])
   const [buyerProfile, setBuyerProfile] = useState(null)
 
-  const FACILITIES = [
-    "Lubuk Gaung Refinery", "Lampung Refinery", "Marunda Refinery",
-    "Belawan Refinery", "Tarjun Refinery", "Surabaya Refinery",
-  ]
-
+  // Fetch buyers and facilities from backend in parallel so both
+  // dropdowns always reflect the live config (no hardcoded lists).
   useEffect(() => {
     fetch("/api/backend/api/buyers")
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => setBuyers(d.buyers || []))
       .catch(() => {})
+
+    fetch("/api/backend/api/options")
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => {
+        const refs = d.refineries || []
+        setFacilities(refs)
+        // If the current facility is no longer in the list (e.g. after a
+        // config change), reset to the first available one.
+        if (refs.length > 0 && !refs.includes(facility)) {
+          onFacilityChange(refs[0])
+        }
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleSelect = (name) => {
@@ -97,6 +111,7 @@ function BuyerSidebar({ selectedBuyer, onSelect, facility, onFacilityChange, onR
           <select
             value={selectedBuyer || ""}
             onChange={e => handleSelect(e.target.value)}
+            aria-label="Select global buyer"
             className="w-full text-sm font-semibold p-2.5 rounded-lg border border-gray-200 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer"
           >
             <option value="">— SELECT BUYER —</option>
@@ -146,9 +161,14 @@ function BuyerSidebar({ selectedBuyer, onSelect, facility, onFacilityChange, onR
           <select
             value={facility}
             onChange={e => onFacilityChange(e.target.value)}
+            aria-label="Select target facility"
             className="w-full text-sm font-semibold p-2.5 rounded-lg border border-gray-200 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer"
+            disabled={facilities.length === 0}
           >
-            {FACILITIES.map(f => <option key={f} value={f}>{f}</option>)}
+            {facilities.length === 0 && (
+              <option value="">Loading facilities…</option>
+            )}
+            {facilities.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
           <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -255,11 +275,11 @@ function GapDashboard({ data }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <DummyDataBadge tooltip="Demand projections and capacity baselines are modelled estimates based on mock historical data, not real buyer contracts." />
           <Badge color="purple">Max PCF: {max_pcf_limit} kg CO₂e/kg</Badge>
           <Badge color={statusColor}>
             {ga.gap_status}
           </Badge>
-          {/* ✅ NEW: Trend Badge */}
           {hasTrend && (
             <Badge color={trendData.direction === 'improving' ? 'green' : trendData.direction === 'worsening' ? 'red' : 'gray'}>
               {trendData.direction === 'improving' ? '↘' : trendData.direction === 'worsening' ? '↗' : '→'}
@@ -430,7 +450,7 @@ function MetricCell({ icon, label, value, status = "normal" }) {
 /* ─────────────────────────────────────────────────────────────────
    Route Card — shows one fulfillment route with full metrics
    ───────────────────────────────────────────────────────────────── */
-function RouteCard({ route, buyerPcfLimit }) {
+function RouteCard({ route, buyerPcfLimit, onApplyToOrder }) {
   const em = route.enterprise_metrics
   const { pcf_score, capacity_constraints, route_distance, volume_similarity } = em.metrics
 
@@ -439,15 +459,8 @@ function RouteCard({ route, buyerPcfLimit }) {
   const distOk = route_distance.efficiency_score_percent >= 60
   const volOk  = volume_similarity.volume_similarity_percent >= 50
 
-  // ✅ ENHANCEMENT: Add navigation handler for Apply to Order
   const handleApplyToOrder = () => {
-    const params = new URLSearchParams({
-      route_id: route.route_id,
-      facility: route.supply_chain_path?.find(n => n.supplier_type === "REFINERY")?.supplier_name || '',
-      product: route.product_code || '',
-      apply_route: 'true'
-    })
-    window.location.href = `/?${params.toString()}`
+    if (onApplyToOrder) onApplyToOrder(route)
   }
 
   const recColors = {
@@ -610,7 +623,161 @@ function RouteCard({ route, buyerPcfLimit }) {
 /* ─────────────────────────────────────────────────────────────────
    Main Export — GapAnalysisDashboard
    ───────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────
+   Route Card Loading Skeleton
+   ───────────────────────────────────────────────────────────────── */
+function RouteCardSkeleton() {
+  return (
+    <Card className="flex flex-col animate-pulse">
+      <div className="border-b px-5 py-4 bg-gray-50">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 space-y-2">
+            <div className="h-3 bg-gray-200 rounded w-32" />
+            <div className="h-5 bg-gray-200 rounded w-48" />
+            <div className="h-3 bg-gray-200 rounded w-40" />
+          </div>
+          <div className="h-10 w-10 bg-gray-200 rounded-lg" />
+        </div>
+      </div>
+      <div className="px-5 pt-5 pb-2">
+        <div className="flex items-start justify-between gap-2">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="flex-1 h-24 bg-gray-100 rounded-xl" />
+          ))}
+        </div>
+      </div>
+      <div className="px-5 pt-3 pb-5 flex-1">
+        <div className="grid grid-cols-2 gap-2">
+          {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
+            <div key={i} className="h-14 bg-gray-100 rounded-xl" />
+          ))}
+        </div>
+      </div>
+      <div className="mt-auto px-5 py-3 border-t border-gray-100 bg-gray-50">
+        <div className="h-4 bg-gray-200 rounded w-32" />
+      </div>
+    </Card>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Dummy Trend Data Fallback
+   ───────────────────────────────────────────────────────────────── */
+const FALLBACK_TREND_DATA = {
+  direction: "worsening",
+  change_pct: -5.2,
+  lookback_weeks: 8,
+  historical_data: [
+    { week: 1, gap_percentage: 8.0 },
+    { week: 2, gap_percentage: 9.5 },
+    { week: 3, gap_percentage: 10.0 },
+    { week: 4, gap_percentage: 10.8 },
+    { week: 5, gap_percentage: 11.2 },
+    { week: 6, gap_percentage: 11.5 },
+    { week: 7, gap_percentage: 12.0 },
+    { week: 8, gap_percentage: 12.3 },
+  ],
+  forecast: {
+    direction: "increase",
+    projected_gap_pct: 15.5,
+    week_number: 4,
+    will_become_critical: true,
+    weeks_until_critical: 2,
+  },
+  key_drivers: [
+    {
+      description: "Increased demand from buyer expansion in Asia-Pacific region",
+      impact: "negative",
+      percentage: 3.5,
+    },
+    {
+      description: "Factory B capacity constraints due to maintenance",
+      impact: "negative",
+      percentage: -2.0,
+    },
+    {
+      description: "Delayed shipments from Supplier A",
+      impact: "negative",
+      percentage: -1.2,
+    },
+  ],
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Carbon Delta Card — shows CO₂e savings between routes
+   ───────────────────────────────────────────────────────────────── */
+function CarbonDeltaCard({ routes, buyerPcfLimit }) {
+  if (!routes || routes.length < 2) return null
+
+  const sorted = [...routes].sort((a, b) => {
+    const pcfA = a.enterprise_metrics?.metrics?.pcf_score?.pcf_per_unit_kg_co2e_per_kg || 0
+    const pcfB = b.enterprise_metrics?.metrics?.pcf_score?.pcf_per_unit_kg_co2e_per_kg || 0
+    return pcfA - pcfB
+  })
+
+  const best = sorted[0]
+  const worst = sorted[sorted.length - 1]
+  const bestPcf = best.enterprise_metrics?.metrics?.pcf_score?.pcf_per_unit_kg_co2e_per_kg || 0
+  const worstPcf = worst.enterprise_metrics?.metrics?.pcf_score?.pcf_per_unit_kg_co2e_per_kg || 0
+  const delta = worstPcf - bestPcf
+
+  // Estimate annual savings based on average routed volume
+  const avgVolumeKg = routes.reduce((sum, r) => sum + (r.routed_volume_kg || 0), 0) / routes.length
+  const annualSavingsKg = delta * avgVolumeKg
+  const annualSavingsTon = annualSavingsKg / 1000
+
+  if (delta <= 0) return null
+
+  return (
+    <Card>
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-xl">🌿</span>
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Carbon Delta — Route Comparison</h3>
+            <p className="text-xs text-gray-400 mt-0.5">CO₂e savings potential between optimal and risky routes</p>
+          </div>
+        </div>
+        <DummyDataBadge tooltip="PCF values and route distances are modelled estimates, not measured operational emissions." />
+      </div>
+      <div className="p-5">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-green-600 mb-1">Best Route PCF</p>
+            <p className="text-lg font-black text-green-800">{bestPcf.toFixed(4)} kg/kg</p>
+            <p className="text-[10px] text-green-600 mt-0.5">{best.route_label}</p>
+          </div>
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-red-600 mb-1">Worst Route PCF</p>
+            <p className="text-lg font-black text-red-800">{worstPcf.toFixed(4)} kg/kg</p>
+            <p className="text-[10px] text-red-600 mt-0.5">{worst.route_label}</p>
+          </div>
+          <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-blue-600 mb-1">Delta Savings</p>
+            <p className="text-lg font-black text-blue-800">↓ {delta.toFixed(4)} kg/kg</p>
+            <p className="text-[10px] text-blue-600 mt-0.5">~{annualSavingsTon.toFixed(1)} tCO₂e saved</p>
+          </div>
+        </div>
+        {buyerPcfLimit && (
+          <div className="mt-3 rounded-xl border border-purple-200 bg-purple-50 px-4 py-2.5 flex items-center gap-2">
+            <span>📏</span>
+            <p className="text-xs text-purple-700">
+              Buyer limit: <strong>{buyerPcfLimit} kg CO₂e/kg</strong> — 
+              Best route is <strong>{bestPcf <= buyerPcfLimit ? "within" : "exceeds"}</strong> limit, 
+              worst route is <strong>{worstPcf <= buyerPcfLimit ? "within" : "exceeds"}</strong> limit.
+            </p>
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Main Export — GapAnalysisDashboard
+   ───────────────────────────────────────────────────────────────── */
 export default function GapAnalysisDashboard() {
+  const router = useRouter()
   const [selectedBuyer,  setSelectedBuyer]  = useState(null)
   const [facility,       setFacility]       = useState("Lubuk Gaung Refinery")
   const [gapData,        setGapData]        = useState(null)
@@ -746,87 +913,43 @@ export default function GapAnalysisDashboard() {
             {/* Gap Dashboard */}
             {!loading && gapData && <GapDashboard data={gapData} />}
 
-            {/* ✅ NEW: Gap Trend Indicator with Forecasting */}
+            {/* Gap Trend Indicator with Forecasting (single instance with fallback data) */}
             {!loading && gapData && (() => {
-              // ✅ DUMMY DATA for demonstration
-              const dummyTrendData = {
+              const trendGapData = {
                 ...gapData,
                 gap_analysis: {
                   ...gapData.gap_analysis,
-                  trend: gapData.gap_analysis?.trend || {
-                    direction: "worsening",
-                    change_pct: -5.2,
-                    lookback_weeks: 8,
-                    historical_data: [
-                      {week: 1, gap_percentage: 8.0},
-                      {week: 2, gap_percentage: 9.5},
-                      {week: 3, gap_percentage: 10.0},
-                      {week: 4, gap_percentage: 10.8},
-                      {week: 5, gap_percentage: 11.2},
-                      {week: 6, gap_percentage: 11.5},
-                      {week: 7, gap_percentage: 12.0},
-                      {week: 8, gap_percentage: 12.3}
-                    ],
-                    forecast: {
-                      direction: "increase",
-                      projected_gap_pct: 15.5,
-                      week_number: 4,
-                      will_become_critical: true,
-                      weeks_until_critical: 2
-                    },
-                    key_drivers: [
-                      {
-                        description: "Increased demand from buyer expansion in Asia-Pacific region",
-                        impact: "negative",
-                        percentage: 3.5
-                      },
-                      {
-                        description: "Factory B capacity constraints due to maintenance",
-                        impact: "negative",
-                        percentage: -2.0
-                      },
-                      {
-                        description: "Delayed shipments from Supplier A",
-                        impact: "negative",
-                        percentage: -1.2
-                      }
-                    ]
-                  }
-                }
+                  trend: gapData.gap_analysis?.trend || FALLBACK_TREND_DATA,
+                },
               }
               
               return (
                 <GapTrendIndicator
-                  gapAnalysis={dummyTrendData}
+                  gapAnalysis={trendGapData}
                   showForecast={true}
                   onViewRecommendations={() => {
                     const params = new URLSearchParams({
                       facility: facility,
                       product: gapData.product_code || 'CPO',
-                      gap_closure: 'true'
+                      gap_closure: 'true',
+                      gap_size: String(gapData.gap_analysis?.shortfall_kg || 0),
                     })
-                    window.location.href = `/?${params.toString()}`
+                    router.push(`/?${params.toString()}`)
                   }}
                 />
               )
             })()}
 
-            {/* ✅ NEW: Gap Trend Indicator with Forecasting */}
-            {!loading && gapData && (
-              <GapTrendIndicator
-                gapAnalysis={gapData}
-                showForecast={true}
-                onViewRecommendations={() => {
-                  // Navigate to recommendation page with gap closure context
-                  const params = new URLSearchParams({
-                    facility: facility,
-                    product: gapData.product_code || 'CPO',
-                    gap_closure: 'true',
-                    gap_size: gapData.gap_analysis?.shortfall_kg || 0
-                  })
-                  window.location.href = `/?${params.toString()}`
-                }}
-              />
+            {/* Carbon Delta Card — route CO₂e comparison */}
+            {!loading && routes.length >= 2 && (
+              <CarbonDeltaCard routes={routes} buyerPcfLimit={gapData?.max_pcf_limit} />
+            )}
+
+            {/* Route Loading Skeleton */}
+            {loading && (
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                {[1, 2, 3].map(i => <RouteCardSkeleton key={i} />)}
+              </div>
             )}
 
             {/* Fulfillment Routes */}
@@ -856,6 +979,15 @@ export default function GapAnalysisDashboard() {
                       key={route.route_id}
                       route={route}
                       buyerPcfLimit={gapData?.max_pcf_limit}
+                      onApplyToOrder={(r) => {
+                        const params = new URLSearchParams({
+                          route_id: r.route_id,
+                          facility: r.supply_chain_path?.find(n => n.supplier_type === "REFINERY")?.supplier_name || '',
+                          product: r.product_code || '',
+                          apply_route: 'true'
+                        })
+                        router.push(`/?${params.toString()}`)
+                      }}
                     />
                   ))}
                 </div>

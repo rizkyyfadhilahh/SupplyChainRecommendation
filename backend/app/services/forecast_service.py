@@ -11,6 +11,7 @@ from app.config import (
     MIN_ACTIVE_DAYS_FOR_EXACT,
     MIN_TXN_FOR_EXACT,
     facility_groups,
+    get_forecast_threshold,
 )
 from app.state import get_app_data, require_app_data
 from app.pipeline.utils import get_facility_type_for_trace, get_facility_type_safe
@@ -80,7 +81,9 @@ def _build_estate_indexes(df: "pd.DataFrame") -> None:
         _ESTATE_IDX_SUP.setdefault(sup, []).append(row)
 
 def get_target_days_for_edge(receiver_id: str) -> int:
-    return int(FORECAST_TARGET_DAYS)
+    # Read live value from domain config (hot-reloadable).
+    # Falls back to module-level constant if FORECAST_THRESHOLDS not loaded yet.
+    return int(get_forecast_threshold("FORECAST_TARGET_DAYS", FORECAST_TARGET_DAYS))
 
 def apply_estimated_day_rules(raw_days: float, receiver_id: str) -> int:
     return round_days_up(float(raw_days or 0.0))
@@ -107,20 +110,14 @@ def build_edge_leadtime_master() -> pd.DataFrame:
         "insert_date_receiver",
     ]
 
-    # Guard: empty DataFrame (CSV-only mode) or missing columns → return early.
-    # This prevents KeyError when relations_all has no columns.
+        # Guard: empty DataFrame (CSV-only mode) or missing columns.
+    # Fallback: build from product_flow cache which IS available in CSV-only mode.
     if relations_all.empty or not all(c in relations_all.columns for c in needed_cols):
-        return _EMPTY
+        return _build_edge_leadtime_from_product_flow(facility_lookup)
 
     rel = relations_all[needed_cols].copy()
     if rel.empty:
-        return pd.DataFrame(columns=[
-            "supplier", "facility", "product",
-            "txn_count", "total_qty", "active_days",
-            "median_duration_days", "avg_duration_days", "throughput_tpd",
-            "median_daily_qty", "avg_daily_qty",
-            "supplier_type", "facility_type",
-        ])
+        return _build_edge_leadtime_from_product_flow(facility_lookup)
 
     rel["vendor_receiver"] = (
         pd.to_numeric(rel["vendor_receiver"], errors="coerce")
@@ -231,6 +228,114 @@ def build_edge_leadtime_master() -> pd.DataFrame:
     return grouped
 
 
+def _build_edge_leadtime_from_product_flow(facility_lookup: pd.DataFrame) -> pd.DataFrame:
+    """Build edge leadtime master from product_flow cache.
+    Used in CSV-only mode where relations_all is not cached.
+    product_flow has quantity aggregated per supplier-facility-product,
+    which we use as throughput_tpd proxy (historical daily average).
+    duration_days is estimated from DEFAULT_LEAD_DAYS_BY_TYPE.
+    """
+    from app.state import get_app_data
+
+    _EMPTY = pd.DataFrame(columns=[
+        "supplier", "facility", "product",
+        "txn_count", "total_qty", "active_days",
+        "median_duration_days", "avg_duration_days", "throughput_tpd",
+        "median_daily_qty", "avg_daily_qty",
+        "supplier_type", "facility_type",
+    ])
+
+    product_flow = get_app_data("product_flow")
+    if product_flow is None or product_flow.empty:
+        return _EMPTY
+
+    needed = ["supplier", "facility", "product", "quantity"]
+    if not all(c in product_flow.columns for c in needed):
+        return _EMPTY
+
+    df = product_flow[needed].copy()
+    df = df[
+        df["supplier"].notna() & (df["supplier"].astype(str).str.strip() != "") &
+        df["facility"].notna() & (df["facility"].astype(str).str.strip() != "") &
+        df["product"].notna() & (df["quantity"] > 0)
+    ].copy()
+
+    if df.empty:
+        return _EMPTY
+
+    df["supplier"] = df["supplier"].astype(str).str.strip()
+    df["facility"] = df["facility"].astype(str).str.strip()
+    df["product"]  = df["product"].astype(str).str.upper().str.strip()
+    df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
+
+    # Aggregate: total_qty and throughput_tpd (quantity per day proxy)
+    # product_flow.quantity is the total historical volume — use it as throughput proxy
+    # by dividing by 90 days (3 months data window)
+    DATA_WINDOW_DAYS = 90.0
+    grouped = (
+        df.groupby(["supplier", "facility", "product"], as_index=False)
+        .agg(total_qty=("quantity", "sum"))
+    )
+    grouped["throughput_tpd"]       = grouped["total_qty"] / DATA_WINDOW_DAYS
+    grouped["median_daily_qty"]     = grouped["throughput_tpd"]
+    grouped["avg_daily_qty"]        = grouped["throughput_tpd"]
+    grouped["txn_count"]            = 1
+    grouped["active_days"]          = int(DATA_WINDOW_DAYS)
+
+    # Estimate lead time from config defaults by supplier type
+    grouped = grouped.merge(
+        facility_lookup.rename(columns={
+            "facility_id": "supplier",
+            "facility_name": "supplier_name",
+            "facility_type": "supplier_type",
+            "specification": "supplier_spec",
+        }),
+        on="supplier",
+        how="left",
+    )
+    grouped = grouped.merge(
+        facility_lookup.rename(columns={
+            "facility_id": "facility",
+            "facility_name": "facility_name",
+            "facility_type": "facility_type",
+            "specification": "facility_spec",
+        }),
+        on="facility",
+        how="left",
+    )
+
+    grouped["supplier_type"] = grouped["supplier_type"].fillna("").astype(str).apply(normalize_facility_type)
+    grouped["facility_type"] = grouped["facility_type"].fillna("").astype(str).apply(normalize_facility_type)
+
+    def _lead(stype: str) -> float:
+        return float(DEFAULT_LEAD_DAYS_BY_TYPE.get(str(stype).upper(), 1.0))
+
+    grouped["median_duration_days"] = grouped["supplier_type"].apply(_lead)
+    grouped["avg_duration_days"]    = grouped["median_duration_days"]
+
+    grouped["supplier"]      = grouped["supplier"].astype(str).str.strip()
+    grouped["facility"]      = grouped["facility"].astype(str).str.strip()
+    grouped["product"]       = grouped["product"].astype(str).str.upper().str.strip()
+    grouped["supplier_type"] = grouped["supplier_type"].astype(str).str.upper().str.strip()
+    grouped["facility_type"] = grouped["facility_type"].fillna("").astype(str).str.upper().str.strip()
+
+    logger = __import__("logging").getLogger(__name__)
+    logger.info(
+        "[CSV-only] Built edge leadtime master from product_flow: %d edges",
+        len(grouped),
+    )
+
+    return grouped[
+        [
+            "supplier", "facility", "product",
+            "txn_count", "total_qty", "active_days",
+            "median_duration_days", "avg_duration_days", "throughput_tpd",
+            "median_daily_qty", "avg_daily_qty",
+            "supplier_type", "facility_type",
+        ]
+    ]
+
+
 def build_estate_edge_leadtime_master() -> pd.DataFrame:
     _EMPTY = pd.DataFrame(columns=[
         "supplier", "facility", "product",
@@ -243,9 +348,10 @@ def build_estate_edge_leadtime_master() -> pd.DataFrame:
     ffb_relations = require_app_data("ffb_relations")
     rel = ffb_relations.copy()
 
-    # Guard: empty DataFrame (CSV-only mode) or missing 'mill' column → return early.
+        # Guard: empty DataFrame (CSV-only mode) or missing 'mill' column.
+    # Fallback: build from ffb_flow cache which IS available in CSV-only mode.
     if rel.empty or "mill" not in rel.columns:
-        return _EMPTY
+        return _build_estate_leadtime_from_ffb_flow()
 
     rel["facility"] = rel["mill"].astype(str)
     rel["product"] = "FFB"
@@ -367,6 +473,91 @@ def build_estate_edge_leadtime_master() -> pd.DataFrame:
     grouped["product"] = grouped["product"].astype(str).str.upper().str.strip()
     grouped["supplier_type"] = grouped["supplier_type"].astype(str).str.upper().str.strip()
     return grouped
+
+def _build_estate_leadtime_from_ffb_flow() -> pd.DataFrame:
+    """Build estate edge leadtime master from ffb_flow cache.
+    Used in CSV-only mode where ffb_relations is not cached.
+    ffb_flow has quantity aggregated per supplier-mill,
+    which we use as throughput_tpd proxy.
+    """
+    from app.state import get_app_data
+
+    _EMPTY = pd.DataFrame(columns=[
+        "supplier", "facility", "product",
+        "txn_count", "total_qty", "active_days",
+        "median_duration_days", "avg_duration_days", "throughput_tpd",
+        "median_daily_qty", "avg_daily_qty",
+        "supplier_type", "facility_type",
+    ])
+
+    ffb_flow = get_app_data("ffb_flow")
+    if ffb_flow is None or ffb_flow.empty:
+        return _EMPTY
+
+    needed = ["supplier", "mill", "quantity"]
+    if not all(c in ffb_flow.columns for c in needed):
+        return _EMPTY
+
+    df = ffb_flow[["supplier", "mill", "quantity", "supplier_type", "mill_type"]].copy()
+    df = df[
+        df["supplier"].notna() & (df["supplier"].astype(str).str.strip() != "") &
+        df["mill"].notna() & (df["mill"].astype(str).str.strip() != "") &
+        (df["quantity"] > 0)
+    ].copy()
+
+    if df.empty:
+        return _EMPTY
+
+    df["supplier"] = df["supplier"].astype(str).str.strip()
+    df["facility"] = df["mill"].astype(str).str.strip()
+    df["product"]  = "FFB"
+    df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
+
+    DATA_WINDOW_DAYS = 90.0
+    grouped = (
+        df.groupby(["supplier", "facility", "product"], as_index=False)
+        .agg(
+            total_qty=("quantity", "sum"),
+            supplier_type=("supplier_type", "first"),
+            facility_type=("mill_type", "first"),
+        )
+    )
+
+    grouped["throughput_tpd"]       = grouped["total_qty"] / DATA_WINDOW_DAYS
+    grouped["median_daily_qty"]     = grouped["throughput_tpd"]
+    grouped["avg_daily_qty"]        = grouped["throughput_tpd"]
+    grouped["txn_count"]            = 1
+    grouped["active_days"]          = int(DATA_WINDOW_DAYS)
+
+    grouped["supplier_type"] = grouped["supplier_type"].fillna("").astype(str).apply(normalize_facility_type)
+    grouped["facility_type"] = grouped["facility_type"].fillna("MILL").astype(str).apply(normalize_facility_type)
+
+    estate_lead = float(DEFAULT_LEAD_DAYS_BY_TYPE.get("ESTATE_TO_MILL", 1.0))
+    grouped["median_duration_days"] = estate_lead
+    grouped["avg_duration_days"]    = estate_lead
+
+    grouped["supplier"]      = grouped["supplier"].astype(str).str.strip()
+    grouped["facility"]      = grouped["facility"].astype(str).str.strip()
+    grouped["product"]       = "FFB"
+    grouped["supplier_type"] = grouped["supplier_type"].astype(str).str.upper().str.strip()
+    grouped["facility_type"] = grouped["facility_type"].astype(str).str.upper().str.strip()
+
+    logger = __import__("logging").getLogger(__name__)
+    logger.info(
+        "[CSV-only] Built estate edge leadtime master from ffb_flow: %d edges",
+        len(grouped),
+    )
+
+    return grouped[
+        [
+            "supplier", "facility", "product",
+            "txn_count", "total_qty", "active_days",
+            "median_duration_days", "avg_duration_days", "throughput_tpd",
+            "median_daily_qty", "avg_daily_qty",
+            "supplier_type", "facility_type",
+        ]
+    ]
+
 
 def get_edge_leadtime_master() -> pd.DataFrame:
     global EDGE_LEADTIME_MASTER
@@ -507,9 +698,12 @@ def aggregate_forecast(
 
 
 def row_meets_exact_threshold(row: pd.Series) -> bool:
+    # Read live values from domain config so changes take effect without restart.
+    min_txn = int(get_forecast_threshold("MIN_TXN_FOR_EXACT", MIN_TXN_FOR_EXACT))
+    min_days = int(get_forecast_threshold("MIN_ACTIVE_DAYS_FOR_EXACT", MIN_ACTIVE_DAYS_FOR_EXACT))
     txn_count = int(row.get("txn_count", 0) or 0)
     active_days = int(row.get("active_days", 0) or 0)
-    return txn_count >= MIN_TXN_FOR_EXACT and active_days >= MIN_ACTIVE_DAYS_FOR_EXACT
+    return txn_count >= min_txn and active_days >= min_days
 
 def get_estate_edge_forecast_row(
     supplier_id: str,

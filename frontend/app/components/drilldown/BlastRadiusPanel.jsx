@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import Card, { CardHeader, CardBody } from "../shared/Card"
 import Badge from "../shared/Badge"
 import { formatCurrency, formatDays } from "@/utils/formatters"
@@ -54,6 +55,7 @@ export default function BlastRadiusPanel({
   supplyChainData,
   onMitigationRequest 
 }) {
+  const router = useRouter()
   const [blastRadiusData, setBlastRadiusData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -310,7 +312,7 @@ export default function BlastRadiusPanel({
                       node_id: selectedNode.id || selectedNode.supplier_id,
                       mitigation_mode: 'true'
                     })
-                    window.location.href = `/?${params.toString()}`
+                    router.push(`/?${params.toString()}`)
                   }}
                   className="flex-1 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-sm font-bold px-4 py-2.5 transition flex items-center justify-center gap-2"
                 >

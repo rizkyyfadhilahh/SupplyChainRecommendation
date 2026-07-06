@@ -67,12 +67,13 @@ def _seed_domain_config_to_sqlite_inner():
         df_buyer = pd.DataFrame(rows)
         df_buyer.to_sql("buyer_blacklist", engine, if_exists="replace", index=False)
         
-    # 5. Generic Lists/Sets as a single key-value JSON string for simplicity,
-    # because things like REFINED_PRODUCTS are simple arrays.
+    # 5. Generic Lists/Sets/Dicts as key-value JSON strings.
+    # FORECAST_THRESHOLDS added so thresholds are configurable via the config UI.
     generic_keys = [
         "REFINED_PRODUCTS", "DIRECT_REFINERY_PRODUCTS", "DIRECT_PRODUCT_EMPTY_FALLBACK",
         "VENDOR_PARTNER_PCA_PRODUCTS", "REFINERIES_WITH_KCP", "PASS_THROUGH_TYPES",
-        "DEFAULT_LEAD_DAYS_BY_TYPE", "DEFAULT_THROUGHPUT_TPD_BY_PRODUCT"
+        "DEFAULT_LEAD_DAYS_BY_TYPE", "DEFAULT_THROUGHPUT_TPD_BY_PRODUCT",
+        "FORECAST_THRESHOLDS",
     ]
     
     generic_data = []
@@ -84,4 +85,4 @@ def _seed_domain_config_to_sqlite_inner():
         df_gen = pd.DataFrame(generic_data)
         df_gen.to_sql("general_config", engine, if_exists="replace", index=False)
 
-    print("Domain configuration successfully seeded into SQLite tables.")
+    logger.info("Domain configuration successfully seeded into SQLite tables.")

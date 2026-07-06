@@ -1,7 +1,10 @@
+import logging
 import time
 from typing import Any, Dict
 import pandas as pd
 from threading import Lock
+
+logger = logging.getLogger(__name__)
 
 from app.config import facility_groups
 from app.utils import find_first_existing, read_csv_required, normalize_columns
@@ -15,10 +18,10 @@ from app.pipeline.ffb_flow import process_ffb_relations, process_ffb_flow
 from app.pipeline.tolling_flow import process_tolling_flow
 
 def load_application_data() -> Dict[str, Any]:
-    print("load_application_data STARTING", flush=True)
+    logger.info("load_application_data STARTING")
     new_app_data = {}
 
-    print("loading master_facility", flush=True)
+    logger.info("Loading master_facility")
     plant_to_refinery: Dict[str, str] = {}
     for refinery_name, plants in facility_groups.items():
         for plant in plants:
@@ -34,7 +37,7 @@ def load_application_data() -> Dict[str, Any]:
         "**/master_facility_new.csv",
     ])
 
-    print("loading events_bc", flush=True)
+    logger.info("Loading events_bc and links_bc")
     events_path = find_first_existing([
         "3 month/events_bc_01_Des_24_Feb.csv",
         "3 month/events_bc_01_Des_24_feb.csv",
@@ -142,7 +145,7 @@ def load_application_data() -> Dict[str, Any]:
         }
     )
 
-    print("processing linkages", flush=True)
+    logger.info("Processing linkages")
     relations_all = (
         links_bc
         .merge(events_supplier, on="event1_id", how="left")
@@ -222,7 +225,7 @@ def load_application_data() -> Dict[str, Any]:
             continue
         
         if is_sqlite_enabled():
-            print(f"Saving {table_name} ({len(df)} rows) to SQLite...", flush=True)
+            logger.info("Saving %s (%d rows) to SQLite...", table_name, len(df))
             t0 = time.time()
             # Serialize any complex types (list/dict/set) to JSON strings
             df_save = df.copy()
@@ -247,12 +250,12 @@ def load_application_data() -> Dict[str, Any]:
                 chunksize=500,
                 method="multi",
             )
-            print(f"  → {table_name} saved in {time.time()-t0:.1f}s", flush=True)
+            logger.info("  %s saved in %.1fs", table_name, time.time() - t0)
             # Free RAM immediately after saving
             del df_save
         else:
             # CSV-only mode: save to in-memory cache
-            print(f"Caching {table_name} ({len(df)} rows) in memory (CSV-only mode)...", flush=True)
+            logger.info("Caching %s (%d rows) in memory (CSV-only mode)", table_name, len(df))
             save_to_csv_cache(table_name, df)
 
     # ✅ Restore WAL mode after bulk load (only if using SQLite)
@@ -284,5 +287,5 @@ def load_application_data() -> Dict[str, Any]:
     # Free the large DataFrames from this function's scope
     del relations_all, product_relations, ffb_relations, tolling_flow
 
-    print("load_application_data FINISHED", flush=True)
+    logger.info("load_application_data FINISHED")
     return APP_DATA

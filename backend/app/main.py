@@ -15,6 +15,7 @@ from app.db_seeder import seed_domain_config_to_sqlite
 from app.config import reload_domain_config
 from app.database import create_performance_indexes
 from app.services.stock_service import ensure_sloc_config_seeded
+from app.services.audit_service import ensure_audit_table
 from app.utils import setup_logging, register_exception_handler
 from app.middleware import CorrelationIDMiddleware
 
@@ -31,6 +32,8 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(seed_domain_config_to_sqlite)
         # Reload the configs into memory
         await asyncio.to_thread(reload_domain_config)
+        # Ensure audit_logs table exists
+        await asyncio.to_thread(ensure_audit_table)
         
         # Then load application data
         await asyncio.to_thread(load_application_data)

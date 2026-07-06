@@ -18,6 +18,7 @@ import EmptyResultState from "./components/EmptyResultState"
 import ForecastSummaryDetail from "./components/ForecastSummaryDetail"
 import PcfPieChart from "./components/charts/PcfPieChart"
 import PcfAnalysisPanel from "./components/recommendation/PcfAnalysisPanel"
+import { ErrorBoundary } from "./components/shared/ErrorBoundary"
 
 const exportToExcel = (orderResult) => {
   if (!orderResult) return
@@ -248,7 +249,9 @@ export default function Home() {
                 )}
 
                 {combinedResultForGraph?.forecast_summary && (
-                  <ForecastSummaryDetail forecastSummary={combinedResultForGraph.forecast_summary} />
+                  <ErrorBoundary label="Forecast Summary">
+                    <ForecastSummaryDetail forecastSummary={combinedResultForGraph.forecast_summary} />
+                  </ErrorBoundary>
                 )}
 
                 {/* PCF Analysis Panel with Pie Chart and Offset Calculator */}
@@ -299,16 +302,20 @@ export default function Home() {
                   }
 
                   return (
-                    <PcfAnalysisPanel
-                      recommendationOption={optionWithPcf}
-                      buyerMaxPcf={null}
-                      productVolume={totalQty}
-                    />
+                    <ErrorBoundary label="PCF Analysis">
+                      <PcfAnalysisPanel
+                        recommendationOption={optionWithPcf}
+                        buyerMaxPcf={null}
+                        productVolume={totalQty}
+                      />
+                    </ErrorBoundary>
                   )
                 })()}
 
                 <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+                  <ErrorBoundary label="Stock Allocation">
                   <StockAllocationSummary orderResult={activeResult} />
+                </ErrorBoundary>
 
                   <div className="border-t border-gray-100">
                     {activeResult?.stock_overview?.summary?.stock_status === "FULLY_FULFILLED" ? (
@@ -329,7 +336,9 @@ export default function Home() {
                         </p>
                       </div>
                     ) : (
-                      <SupplyGraph orderResult={combinedResultForGraph} />
+                      <ErrorBoundary label="Supply Graph">
+                        <SupplyGraph orderResult={combinedResultForGraph} />
+                      </ErrorBoundary>
                     )}
                   </div>
                 </div>

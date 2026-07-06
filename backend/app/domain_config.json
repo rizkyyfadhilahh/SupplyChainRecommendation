@@ -72,6 +72,12 @@
     "RBDPS": 90.0,
     "PFAD": 60.0
   },
+  "FORECAST_THRESHOLDS": {
+    "MIN_TXN_FOR_EXACT": 3,
+    "MIN_ACTIVE_DAYS_FOR_EXACT": 3,
+    "FORECAST_TARGET_DAYS": 15,
+    "MIN_ALLOCATED_SHARE_PER_SUPPLIER": 0.005
+  },
   "facility_groups": {
     "Lubuk Gaung Refinery": [
       "R113", "R11X", "R21X", "R213", "T112", "T113", "T116", "T118",

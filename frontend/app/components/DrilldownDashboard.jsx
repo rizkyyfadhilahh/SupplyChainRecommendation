@@ -2,8 +2,10 @@
 
 import { useState, useEffect, useRef, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import SupplyGraph from "./SupplyGraph"
 import BlastRadiusPanel from "./drilldown/BlastRadiusPanel"
+import DummyDataBadge from "./shared/DummyDataBadge"
 
 /* ─────────────────────────────────────────────────────────────────
    Formatters  (match page.jsx conventions exactly)
@@ -148,17 +150,34 @@ function BuyerSelector({ buyers, selectedBuyer, onSelect }) {
 /* ─────────────────────────────────────────────────────────────────
    Step 2 — Product grid (clickable pills)
    ───────────────────────────────────────────────────────────────── */
-const PROD_ICONS = { CPO: "🛢️", RBDPO: "🍶", PKO: "🌰", RBDPKO: "🥃", PFAD: "⚗️", RBDOLN: "🫧" }
-const PROD_LABELS = { CPO: "Crude Palm Oil", RBDPO: "RBD Palm Olein", PKO: "Palm Kernel Oil", RBDPKO: "RBD Palm Kernel Oil", PFAD: "Palm Fatty Acid Distillate", RBDOLN: "RBD Palm Olein" }
 
-function ProductGrid({ buyer, selected, onSelect }) {
+// Static icon + label map — purely cosmetic, safe to keep here.
+// If a product code from the backend is not in this map, a sensible
+// fallback (📦 / code itself) is used, so no hardcoded product list.
+const PROD_ICONS  = { CPO: "🛢️", RBDPO: "🍶", PKO: "🌰", RBDPKO: "🥃", PFAD: "⚗️", RBDOLN: "🫧", PK: "🥥", RBDPS: "🧴", RBDST: "🧈", RBDPKO: "🥃" }
+const PROD_LABELS = { CPO: "Crude Palm Oil", RBDPO: "RBD Palm Olein", PKO: "Palm Kernel Oil", RBDPKO: "RBD Palm Kernel Oil", PFAD: "Palm Fatty Acid Distillate", RBDOLN: "RBD Palm Olein", PK: "Palm Kernel", RBDPS: "RBD Palm Stearin", RBDST: "RBD Palm Stearin" }
+
+function ProductGrid({ buyer, selected, onSelect, availableProducts }) {
   if (!buyer) return null
+
+  // Intersect buyer's preferred products with products that are actually
+  // configured in the backend (availableProducts from /api/options).
+  // Falls back to buyer.products alone if the options endpoint hasn't
+  // resolved yet, so the grid is never empty while loading.
+  const displayProducts = availableProducts && availableProducts.length > 0
+    ? (buyer.products || []).filter(p => availableProducts.includes(p))
+    : (buyer.products || [])
+
+  // If intersection is empty (buyer has products the backend doesn't know
+  // about yet), show all buyer products as a safe fallback.
+  const products = displayProducts.length > 0 ? displayProducts : (buyer.products || [])
+
   return (
     <Card>
       <CardHeader icon="📦" title="Step 2 — Select Product" subtitle="Click a product to trigger deep supply chain analysis" />
       <div className="p-5">
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {(buyer.products || []).map(code => (
+          {products.map(code => (
             <button key={code} onClick={() => onSelect(code)}
               className={`rounded-xl border px-3 py-3 text-left transition-all duration-150 ${selected === code
                 ? "border-rose-500 bg-rose-50 shadow-sm"
@@ -179,7 +198,7 @@ function ProductGrid({ buyer, selected, onSelect }) {
 /* ─────────────────────────────────────────────────────────────────
    Widget A — Historical Route card with frequency analysis
    ───────────────────────────────────────────────────────────────── */
-function HistoricalRouteCard({ ctx }) {
+function HistoricalRouteCard({ ctx, onNodeClick }) {
   const r = ctx.historical.route
   const pcf = ctx.historical.pcf_breakdown || {}
   const history = ctx.shipping_history || []
@@ -196,10 +215,10 @@ function HistoricalRouteCard({ ctx }) {
   const topEstates = Object.entries(estateFreq).sort((a, b) => b[1] - a[1]).slice(0, 3)
   const topMills = Object.entries(millFreq).sort((a, b) => b[1] - a[1]).slice(0, 3)
 
-  const NODES = [
-    { key: "estate", icon: "🌴", bg: "bg-emerald-50 border-emerald-200", label: "Estate" },
-    { key: "mill", icon: "🏭", bg: "bg-amber-50   border-amber-200", label: "Mill" },
-    { key: "refinery", icon: "⛽", bg: "bg-blue-50    border-blue-200", label: "Refinery" },
+    const NODES = [
+    { key: "estate", icon: "🌴", bg: "bg-emerald-50 border-emerald-200", hoverBg: "hover:border-emerald-400 hover:shadow-md", label: "Estate" },
+    { key: "mill", icon: "🏭", bg: "bg-amber-50   border-amber-200", hoverBg: "hover:border-amber-400 hover:shadow-md", label: "Mill" },
+    { key: "refinery", icon: "⛽", bg: "bg-blue-50    border-blue-200", hoverBg: "hover:border-blue-400 hover:shadow-md", label: "Refinery" },
   ]
   const stages = [
     { label: "Stage 1 · Harvest", val: pcf.stage1_harvest_emission_kg_co2e, color: "bg-emerald-500" },
@@ -212,40 +231,56 @@ function HistoricalRouteCard({ ctx }) {
 
   return (
     <Card>
-      <CardHeader icon="🗺️" title="Historical Supply Chain Route"
+            <CardHeader icon="🗺️" title="Historical Supply Chain Route"
         subtitle={`Verified baseline route — ${ctx.product_label}`}
-        right={<Badge color="blue">Baseline</Badge>}
+        right={
+          <div className="flex items-center gap-2">
+            <DummyDataBadge tooltip="Route, PCF values, and shipping history are modelled demo data, not real shipment records." />
+            <Badge color="blue">Baseline</Badge>
+          </div>
+        }
       />
       <div className="p-5 space-y-5">
         {/* 3-hop flow */}
         <div className="flex items-start gap-1 justify-between">
-          {NODES.map(({ key, icon, bg, label }, i) => {
-            const node = r[key]
-            return (
-              <div key={key} className="flex items-start gap-1 flex-1">
-                <div className="flex-1">
-                  <div className={`rounded-xl border ${bg} p-3 flex flex-col items-center text-center`}>
-                    <span className="text-xl mb-1">{icon}</span>
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">{label}</p>
-                    <p className="text-[11px] font-semibold text-gray-800 mt-1 leading-tight">{node?.name || "—"}</p>
-                    <p className="text-[9px] text-gray-400 mt-0.5">ID: {node?.id}</p>
-                    {node?.spec && (
-                      <span className={`mt-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${node.spec === "EUDR" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-                        }`}>{node.spec}</span>
-                    )}
+          {NODES.map(({ key, icon, bg, hoverBg, label }, i) => {
+              const node = r[key]
+              return (
+                <div key={key} className="flex items-start gap-1 flex-1">
+                  <div className="flex-1">
+                    <button
+                      type="button"
+                      onClick={() => onNodeClick && node && onNodeClick({
+                        id: node.id,
+                        name: node.name,
+                        type: key.toUpperCase(),
+                        supplier_type: key.toUpperCase()
+                      })}
+                      className={`w-full rounded-xl border ${bg} ${hoverBg} p-3 flex flex-col items-center text-center transition-all cursor-pointer`}
+                      aria-label={`Analyze blast radius for ${node?.name || label}`}
+                      title="Click to analyze blast radius impact"
+                    >
+                      <span className="text-xl mb-1">{icon}</span>
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">{label}</p>
+                      <p className="text-[11px] font-semibold text-gray-800 mt-1 leading-tight">{node?.name || "—"}</p>
+                      <p className="text-[9px] text-gray-400 mt-0.5">ID: {node?.id}</p>
+                      {node?.spec && (
+                        <span className={`mt-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${node.spec === "EUDR" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                          }`}>{node.spec}</span>
+                      )}
+                    </button>
                   </div>
+                  {i < 2 && (
+                    <div className="flex items-center pt-7 px-0.5 shrink-0">
+                      <svg width="20" height="12" viewBox="0 0 20 12" fill="none">
+                        <path d="M0 6h16" stroke="#d1d5db" strokeWidth="2" />
+                        <path d="M12 1l5 5-5 5" stroke="#d1d5db" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </div>
+                  )}
                 </div>
-                {i < 2 && (
-                  <div className="flex items-center pt-7 px-0.5 shrink-0">
-                    <svg width="20" height="12" viewBox="0 0 20 12" fill="none">
-                      <path d="M0 6h16" stroke="#d1d5db" strokeWidth="2" />
-                      <path d="M12 1l5 5-5 5" stroke="#d1d5db" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                  </div>
-                )}
-              </div>
-            )
-          })}
+              )
+            })}
         </div>
 
         {/* PCF per-stage breakdown */}
@@ -834,7 +869,12 @@ function ResolutionRouteCard({ route, buyerMaxPcf, index }) {
               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{route.route_id}</span>
               <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${rec.pill}`}>{rec.label}</span>
               {isReal && <Badge color="blue">Live Trace</Badge>}
-              {!isReal && <Badge color="gray">Modelled</Badge>}
+                      {!isReal && (
+                        <>
+                          <Badge color="gray">Modelled</Badge>
+                          <DummyDataBadge tooltip="Enterprise metrics (PCF, capacity, distance) are modelled estimates, not real operational data." />
+                        </>
+                      )}
             </div>
             <p className="text-base font-bold text-gray-900">{route.route_label}</p>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -945,30 +985,41 @@ function ResolutionRouteCard({ route, buyerMaxPcf, index }) {
    Main export — DrilldownDashboard
    ───────────────────────────────────────────────────────────────── */
 export default function DrilldownDashboard() {
-  const [buyers, setBuyers] = useState([])
+  const router = useRouter()
+    const [buyers, setBuyers] = useState([])
+  const [availableProducts, setAvailableProducts] = useState([])
   const [selectedBuyer, setSelectedBuyer] = useState(null)
   const [selectedProd, setSelectedProd] = useState(null)
   const [context, setContext] = useState(null)
   const [resolution, setResolution] = useState(null)
   const [heatmap, setHeatmap] = useState(null)
   const [loadingCtx, setLoadingCtx] = useState(false)
-    const [loadingRes, setLoadingRes] = useState(false)
+  const [loadingRes, setLoadingRes] = useState(false)
   const [error, setError] = useState(null)
   
-  // ✅ NEW: State for Blast Radius feature
+  // State for Blast Radius feature — only set when user explicitly clicks a node
   const [selectedNode, setSelectedNode] = useState(null)
+  
+  // State for template route pre-population
+  const [templateShipment, setTemplateShipment] = useState(null)
 
   const searchParams = useSearchParams()
   const initBuyerName = searchParams.get("buyer")
   const initProduct = searchParams.get("product")
 
-  // Load buyers + heatmap on mount
+    // Load buyers on mount
   useEffect(() => {
-    fetch("/api/backend/api/drilldown/buyers")
-      .then(r => r.json())
-      .then(d => {
-        const fetchedBuyers = d.buyers || []
+        // Load buyers and available products in parallel
+    Promise.all([
+      fetch("/api/backend/api/drilldown/buyers")
+        .then(r => r.ok ? r.json() : Promise.reject(r.status)),
+      fetch("/api/backend/api/options")
+        .then(r => r.ok ? r.json() : Promise.reject(r.status)),
+    ])
+      .then(([buyersData, optionsData]) => {
+        const fetchedBuyers = buyersData.buyers || []
         setBuyers(fetchedBuyers)
+        setAvailableProducts(optionsData.products || [])
         if (initBuyerName && initProduct) {
           const matchedBuyer = fetchedBuyers.find(b => b.name === initBuyerName)
           if (matchedBuyer) {
@@ -979,6 +1030,19 @@ export default function DrilldownDashboard() {
       })
       .catch(() => setError("Could not load buyers. Ensure the backend is running."))
   }, [initBuyerName, initProduct])
+
+  // Load capacity heatmap data
+  useEffect(() => {
+    fetch("/api/backend/api/drilldown/capacity-heatmap")
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) setHeatmap(data)
+      })
+      .catch(() => {
+        // Heatmap is non-critical — fail silently
+        console.warn('Could not load capacity heatmap')
+      })
+  }, [])
 
   // Fetch context whenever buyer + product change
   useEffect(() => {
@@ -1013,16 +1077,25 @@ export default function DrilldownDashboard() {
       .finally(() => setLoadingCtx(false))
   }, [selectedBuyer, selectedProd])
 
-  const handleBuyerSelect = (b) => {
+    const handleBuyerSelect = (b) => {
     setSelectedBuyer(b)
     setSelectedProd(null)
     setContext(null)
     setResolution(null)
+    setSelectedNode(null)
+    setTemplateShipment(null)
   }
 
   const handleUseTemplate = (shipment) => {
-    // Scroll to resolution section — user just selected a template
+    // Store the template shipment for pre-populating the resolution section
+    setTemplateShipment(shipment)
+    // Scroll to resolution section
     document.getElementById("resolution-section")?.scrollIntoView({ behavior: "smooth" })
+  }
+
+  // Handler for clicking a node in supply chain flow to trigger blast radius
+  const handleNodeClick = (node) => {
+    setSelectedNode(node)
   }
 
   return (
@@ -1049,7 +1122,12 @@ export default function DrilldownDashboard() {
         {/* Step 1 & 2 */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5" style={{ overflow: "visible" }}>
           <BuyerSelector buyers={buyers} selectedBuyer={selectedBuyer} onSelect={handleBuyerSelect} />
-          <ProductGrid buyer={selectedBuyer} selected={selectedProd} onSelect={setSelectedProd} />
+          <ProductGrid
+            buyer={selectedBuyer}
+            selected={selectedProd}
+            onSelect={setSelectedProd}
+            availableProducts={availableProducts}
+          />
         </div>
 
         {/* Loading */}
@@ -1064,7 +1142,7 @@ export default function DrilldownDashboard() {
           <div className="flex flex-col gap-5" style={{ animation: "fadeSlideIn .35s ease both" }}>
             {/* Row 1: Route + Gap side by side */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <HistoricalRouteCard ctx={context} />
+              <HistoricalRouteCard ctx={context} onNodeClick={handleNodeClick} />
               <ForecastGapCard ctx={context} />
             </div>
 
@@ -1078,32 +1156,18 @@ export default function DrilldownDashboard() {
                         {/* Row 3: Capacity Heatmap (if loaded) */}
             {heatmap && <CapacityHeatmap heatmapData={heatmap} />}
 
-            {/* ✅ NEW: Blast Radius Impact Analysis Panel */}
-            {(() => {
-              // ✅ DUMMY: Auto-select first node for demonstration
-              const demoNode = selectedNode || {
-                id: "ESTATE_001",
-                name: "Sumatra Estate Alpha",
-                type: "ESTATE",
-                supplier_type: "ESTATE"
-              }
-
-              return (
-                <BlastRadiusPanel
-                  selectedNode={demoNode}
-                  supplyChainData={context}
-                  onMitigationRequest={(node) => {
-                    console.log('Mitigation requested for:', node)
-                    // Navigate to recommendations with mitigation context
-                    const params = new URLSearchParams({
-                      mitigation_for: node.node_id,
-                      facility: context?.historical?.route?.refinery?.name || ''
-                    })
-                    window.location.href = `/?${params.toString()}`
-                  }}
-                />
-              )
-            })()}
+                        {/* Blast Radius Impact Analysis Panel — only renders when user clicks a node */}
+            <BlastRadiusPanel
+              selectedNode={selectedNode}
+              supplyChainData={context}
+              onMitigationRequest={(node) => {
+                const params = new URLSearchParams({
+                  mitigation_for: node.node_id,
+                  facility: context?.historical?.route?.refinery?.name || ''
+                })
+                router.push(`/?${params.toString()}`)
+              }}
+            />
           </div>
         )}
 
@@ -1135,6 +1199,28 @@ export default function DrilldownDashboard() {
               )}
             </div>
 
+                        {/* Template route indicator */}
+            {templateShipment && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">📋</span>
+                  <div>
+                    <p className="text-xs font-bold text-blue-800">Template Route Applied</p>
+                    <p className="text-[11px] text-blue-600 mt-0.5">
+                      {templateShipment.route?.estate?.name || '—'} → {templateShipment.route?.mill?.name || '—'} → {templateShipment.route?.refinery?.name || '—'}
+                      &nbsp;· BL: {templateShipment.bl_number || templateShipment.shipment_id}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setTemplateShipment(null)}
+                  className="text-xs font-bold text-blue-600 hover:text-blue-500 border border-blue-300 rounded-lg px-2 py-1"
+                >
+                  ✕ Clear
+                </button>
+              </div>
+            )}
+
             {loadingRes && (
               <Card className="p-6">
                 <Spinner label="Generating fulfillment routes via trace engine…" />
@@ -1147,7 +1233,8 @@ export default function DrilldownDashboard() {
                   ...resolution,
                   tree: resolution.recommendation_options[0].tree,
                   forecast_summary: resolution.recommendation_options[0].forecast_summary,
-                  option_type: resolution.recommendation_options[0].option_type
+                  option_type: resolution.recommendation_options[0].option_type,
+                  ...(templateShipment ? { template_route: templateShipment.route } : {})
                 }} />
               </div>
             )}

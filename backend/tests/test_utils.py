@@ -3,7 +3,8 @@ import pandas as pd
 from app.utils import (
     normalize_columns, normalize_facility_type,
     normalize_spec_value, normalize_trace_product,
-    safe_mean, safe_median, round_days_up, is_valid_value
+    safe_mean, safe_median, round_days_up, is_valid_value,
+    bool_from_any, normalize_display_key, to_date_str,
 )
 
 def test_normalize_columns():
@@ -49,3 +50,58 @@ def test_is_valid_value():
     assert is_valid_value("nan") is False
     assert is_valid_value("None") is False
     assert is_valid_value("") is False
+
+
+def test_bool_from_any_truthy():
+    for v in ["true", "1", "yes", "y", "TRUE", "YES"]:
+        assert bool_from_any(v) is True
+
+
+def test_bool_from_any_falsy():
+    for v in ["false", "0", "no", "n", "FALSE", "NO", "", "random"]:
+        assert bool_from_any(v) is False
+
+
+def test_normalize_display_key_strips_whitespace():
+    assert normalize_display_key("  hello  ") == "HELLO"
+
+
+def test_normalize_display_key_removes_zero_width_space():
+    result = normalize_display_key("hello\u200Bworld")
+    assert "\u200B" not in result
+
+
+def test_normalize_display_key_replaces_nbsp():
+    result = normalize_display_key("hello\u00A0world")
+    assert "\u00A0" not in result
+
+
+def test_normalize_display_key_collapses_spaces():
+    assert normalize_display_key("hello   world") == "HELLO WORLD"
+
+
+def test_to_date_str_valid():
+    assert to_date_str("2024-06-15") == "2024-06-15"
+
+
+def test_to_date_str_invalid():
+    assert to_date_str("not-a-date") is None
+    assert to_date_str(None) is None
+    assert to_date_str("") is None
+
+
+def test_normalize_trace_product_pko_variants():
+    assert normalize_trace_product("PKO") == "PKO"
+    assert normalize_trace_product("CPKO") == "PKO"
+
+
+def test_normalize_trace_product_rbdpko():
+    assert normalize_trace_product("RBDPKO") == "RBDPKO"
+
+
+def test_normalize_trace_product_pk():
+    assert normalize_trace_product("PK") == "PK"
+
+
+def test_normalize_trace_product_pfad():
+    assert normalize_trace_product("PFAD") == "PFAD"

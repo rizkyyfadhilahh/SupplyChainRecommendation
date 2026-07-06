@@ -1,6 +1,9 @@
+import logging
 import os
 import json
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Load .env for local development. In production, this can be omitted 
 # or overriden by system-level environment variables from CI/CD.
@@ -28,10 +31,17 @@ ALLOW_TERMINAL_MILL = True
 ALLOW_CPO_TOLLING = True
 PRIORITIZE_VENDOR_DEBUG = False
 
+# These values are defaults — they are overridden at runtime by
+# reload_domain_config() which reads FORECAST_THRESHOLDS from SQLite
+# (or domain_config.json in CSV-only mode).  Do NOT read these constants
+# directly in hot-path code; use the get_forecast_threshold() accessor
+# so live config changes take effect without a restart.
 MIN_TXN_FOR_EXACT = 3
 MIN_ACTIVE_DAYS_FOR_EXACT = 3
 FORECAST_TARGET_DAYS = 15
 MIN_ALLOCATED_SHARE_PER_SUPPLIER = 0.005
+
+FORECAST_THRESHOLDS: dict = {}
 ENABLE_QUEUE_SCHEDULING = True
 
 def get_dynamic_min_allocated_share(demand_qty: float) -> float:
@@ -57,6 +67,27 @@ DEFAULT_LEAD_DAYS_BY_TYPE = {}
 DEFAULT_THROUGHPUT_TPD_BY_PRODUCT = {}
 facility_groups = {}
 buyer_blacklist = {}
+
+def get_forecast_threshold(key: str, default=None):
+    """Return a forecast threshold value from the live in-memory config.
+    Falls back to the module-level constant if the key is not present.
+    This allows hot-reloading of thresholds without a server restart.
+
+    Supported keys:
+      MIN_TXN_FOR_EXACT, MIN_ACTIVE_DAYS_FOR_EXACT,
+      FORECAST_TARGET_DAYS, MIN_ALLOCATED_SHARE_PER_SUPPLIER
+    """
+    if FORECAST_THRESHOLDS:
+        return FORECAST_THRESHOLDS.get(key, default)
+    # Fall back to module-level constants
+    _fallbacks = {
+        "MIN_TXN_FOR_EXACT": MIN_TXN_FOR_EXACT,
+        "MIN_ACTIVE_DAYS_FOR_EXACT": MIN_ACTIVE_DAYS_FOR_EXACT,
+        "FORECAST_TARGET_DAYS": FORECAST_TARGET_DAYS,
+        "MIN_ALLOCATED_SHARE_PER_SUPPLIER": MIN_ALLOCATED_SHARE_PER_SUPPLIER,
+    }
+    return _fallbacks.get(key, default)
+
 
 def reload_domain_config():
     """Reads domain config from SQLite tables (or JSON if CSV-only mode) and updates the in-memory dictionaries directly."""
@@ -111,8 +142,11 @@ def reload_domain_config():
             
             DEFAULT_THROUGHPUT_TPD_BY_PRODUCT.clear()
             DEFAULT_THROUGHPUT_TPD_BY_PRODUCT.update(data.get("DEFAULT_THROUGHPUT_TPD_BY_PRODUCT", {}))
+
+            FORECAST_THRESHOLDS.clear()
+            FORECAST_THRESHOLDS.update(data.get("FORECAST_THRESHOLDS", {}))
             
-            print("Domain config loaded from JSON (CSV-only mode)")
+            logger.info("Domain config loaded from JSON (CSV-only mode)")
         return
     
     # SQLite mode: load from database tables
@@ -172,9 +206,12 @@ def reload_domain_config():
                 elif k == "DEFAULT_THROUGHPUT_TPD_BY_PRODUCT":
                     DEFAULT_THROUGHPUT_TPD_BY_PRODUCT.clear()
                     DEFAULT_THROUGHPUT_TPD_BY_PRODUCT.update(v)
+                elif k == "FORECAST_THRESHOLDS":
+                    FORECAST_THRESHOLDS.clear()
+                    FORECAST_THRESHOLDS.update(v)
                     
     except Exception as e:
-        print(f"Warning: Could not load domain config from SQLite: {e}")
+        logger.warning("Could not load domain config from SQLite: %s", e)
 
 # Load the config immediately upon module import (will be empty until seeded)
 reload_domain_config()

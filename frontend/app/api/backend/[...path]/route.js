@@ -18,6 +18,8 @@ const ALLOWED_PATHS = new Set([
   "api/drilldown/product-context",
   "api/drilldown/resolve-gap",
   "api/drilldown/capacity-heatmap",
+  "api/config",
+  "api/config/audit-history",
 ])
 
 // Server-side request timeout (ms). Guards the proxy-to-backend leg
@@ -86,4 +88,4 @@ export async function POST(request, { params }) {
     return Response.json({ detail: err.message || "Proxy POST error" }, { status: 500 })
   }
 }
-
+

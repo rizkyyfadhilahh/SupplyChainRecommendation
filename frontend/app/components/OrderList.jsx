@@ -1,6 +1,19 @@
 "use client"
 
+import { useState, useCallback, useRef } from "react"
+
 export default function OrderList({ orders, onRemove, onGenerate, loading }) {
+  const [cooldown, setCooldown] = useState(false)
+  const cooldownTimer = useRef(null)
+
+  // Prevent spam: disable Generate button for 3 seconds after each click.
+  const handleGenerate = useCallback(() => {
+    if (cooldown || loading) return
+    onGenerate()
+    setCooldown(true)
+    if (cooldownTimer.current) clearTimeout(cooldownTimer.current)
+    cooldownTimer.current = setTimeout(() => setCooldown(false), 3000)
+  }, [cooldown, loading, onGenerate])
   if (orders.length === 0) return null
 
   return (
@@ -15,25 +28,30 @@ export default function OrderList({ orders, onRemove, onGenerate, loading }) {
             {orders.length} order{orders.length > 1 ? "s" : ""} pending processing
           </p>
         </div>
-        <button
-          onClick={onGenerate}
-          disabled={loading}
-          className="bg-red-700 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-6 py-2.5 rounded-xl transition flex items-center gap-2"
-        >
-          {loading ? (
-            <>
-              <svg className="animate-spin -ml-1 mr-2 w-4 h-4 text-white" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-              </svg>
-              Processing...
-            </>
-          ) : (
-            <>
-              Generate Recommendation
-            </>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            onClick={handleGenerate}
+            disabled={loading || cooldown}
+            className="bg-red-700 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-6 py-2.5 rounded-xl transition flex items-center gap-2"
+          >
+            {loading ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 w-4 h-4 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                </svg>
+                Processing...
+              </>
+            ) : cooldown ? (
+              <>⏱️ Please wait...</>
+            ) : (
+              <>Generate Recommendation</>
+            )}
+          </button>
+          {cooldown && !loading && (
+            <p className="text-[10px] text-gray-400">Cooldown active — prevents duplicate requests</p>
           )}
-        </button>
+        </div>
       </div>
 
       <div className="p-4 flex flex-col gap-2 bg-slate-50/30">

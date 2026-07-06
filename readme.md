@@ -174,12 +174,13 @@ uvicorn app.main:app --reload
 Backend akan load data besar ke SQLite. Tunggu hingga muncul log:
 
 ```
-load_application_data STARTING
-loading master_facility
-loading events_bc
+INFO:app.data_loader:load_application_data STARTING
+INFO:app.data_loader:Loading master_facility
+INFO:app.data_loader:Loading events_bc and links_bc
+INFO:app.data_loader:Processing linkages
 ...
-load_application_data FINISHED
-Application data loaded successfully
+INFO:app.data_loader:load_application_data FINISHED
+INFO:app.main:Application data loaded successfully
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
@@ -427,7 +428,94 @@ Klik **Authorize** dan masukkan API key: `dev-secret-key`
 
 ---
 
-## 12. Quick Start (TL;DR)
+## 12. Mode CSV-Only (Tanpa SQLite) — Untuk Testing Cepat
+
+Secara default, backend load semua data CSV ke SQLite saat startup. Proses ini butuh **2-5 menit** karena file `events_bc` berisi ~980K baris.
+
+Untuk keperluan testing atau development cepat, gunakan **CSV-only mode** — data disimpan langsung di memory (RAM) tanpa proses SQLite sama sekali. Startup bisa **10-30 detik**.
+
+### Cara Mengaktifkan
+
+Tambahkan `USE_SQLITE=false` ke environment sebelum menjalankan backend.
+
+**Windows PowerShell:**
+```powershell
+$env:USE_SQLITE = "false"
+uvicorn app.main:app --reload
+```
+
+**Linux / macOS:**
+```bash
+USE_SQLITE=false uvicorn app.main:app --reload
+```
+
+**Atau tambahkan ke file `backend/.env`:**
+```env
+API_KEY=dev-secret-key
+ALLOWED_ORIGINS=http://localhost:3000
+APP_DEBUG=false
+USE_SQLITE=false
+```
+
+> ⚠️ Hapus atau ubah kembali `USE_SQLITE=false` → `USE_SQLITE=true` sebelum demo atau production. Mode CSV-only tidak support persistence dan beberapa fitur audit log.
+
+### Perbandingan Mode
+
+| | Mode Default (SQLite) | Mode CSV-Only |
+|---|---|---|
+| **Startup time** | 2–5 menit | 10–30 detik |
+| **Cocok untuk** | Demo, production | Development, testing |
+| **Persistence data** | ✅ Tersimpan di file `.db` | ❌ Hilang saat restart |
+| **Concurrency** | ✅ Multi-request aman | ⚠️ Single-user saja |
+| **Audit log** | ✅ Tersimpan di SQLite | ❌ Dilewati |
+| **Config reload** | ✅ `/api/config` GET/PUT | ✅ Baca dari `domain_config.json` |
+| **Hot reload data** | ✅ `/api/system/reload` | ✅ Didukung |
+
+### Cek Mode yang Aktif
+
+Setelah backend berjalan, cek endpoint health:
+
+```bash
+curl http://localhost:8000/health/data
+```
+
+Lihat log startup di terminal — kalau CSV-only aktif akan muncul:
+
+```
+INFO:app.config:Domain config loaded from JSON (CSV-only mode)
+INFO:app.data_loader:load_application_data STARTING
+...
+INFO:app.data_loader:load_application_data FINISHED
+```
+
+Kalau SQLite aktif, muncul log tambahan:
+
+```
+INFO:app.database:Performance indexes ensured.
+```
+
+### Jalankan Tests dengan CSV-Only Mode
+
+Semua test suite sudah dikonfigurasi untuk pakai CSV-only mode secara otomatis:
+
+```powershell
+# Windows PowerShell
+cd backend
+$env:USE_SQLITE = "false"
+$env:API_KEY = "test-api-key"
+$env:PYTHONPATH = "."
+pytest tests/ -v
+```
+
+```bash
+# Linux / macOS
+cd backend
+USE_SQLITE=false API_KEY=test-api-key PYTHONPATH=. pytest tests/ -v
+```
+
+---
+
+## 13. Quick Start (TL;DR)
 
 ```bash
 # 1. Download data dari Google Drive
