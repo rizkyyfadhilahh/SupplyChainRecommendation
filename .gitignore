@@ -1,0 +1,55 @@
+# Environment files - NEVER commit secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Data files - download separately (see README)
+temp_data/
+
+# Next.js
+.next/
+out/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+.continue/
+
+# Agent context / internal docs - do not push
+ENHANCEMENT_README.md
+ERROR_ANALYSIS_AND_FIX.md
+FINAL_SUMMARY.md
+IMPLEMENTATION_COMPLETE.md
+IMPLEMENTATION_GUIDE.md
+PAGE_3_CHANGES_SUMMARY.md
+PERFORMANCE_ANALYSIS_AND_OPTIMIZATION.md
+QUICK_START_GUIDE.md
+TESTING_GUIDE_ALL_PAGES.md
+USER_STORIES.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.db-shm
+*.db-wal

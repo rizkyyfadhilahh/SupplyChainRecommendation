@@ -1,0 +1,70 @@
+services:
+  # ── Backend (FastAPI) ─────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sc_backend
+    restart: unless-stopped
+    environment:
+      APP_DEBUG: "false"
+      ALLOWED_ORIGINS: "http://localhost:3000"
+      API_KEY: ${API_KEY:-dev-secret-key}
+      # ✅ SQLite requires single writer — use 1 worker.
+      # For PostgreSQL, increase this to (2 * CPU_COUNT + 1).
+      WEB_CONCURRENCY: "1"
+      # ✅ Pandas: use all available cores for operations
+      NUMEXPR_MAX_THREADS: "4"
+      OMP_NUM_THREADS: "4"
+    volumes:
+      # Mount temp_data so large CSV & SQLite files live on host
+      - ./backend/temp_data:/app/temp_data
+    ports:
+      - "8000:8000"
+    # ✅ PERFORMANCE: Give backend enough RAM to avoid OOM during data load
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 15s
+      retries: 20
+      # Large dataset (980K rows events_bc) needs more time to load into SQLite
+      start_period: 300s
+    networks:
+      - sc_network
+
+  # ── Frontend (Next.js) ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_URL: "http://backend:8000"
+        BACKEND_API_KEY: ${API_KEY:-dev-secret-key}
+    container_name: sc_frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: "http://backend:8000"
+      BACKEND_API_KEY: ${API_KEY:-dev-secret-key}
+    ports:
+      - "3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    depends_on:
+      backend:
+        condition: service_healthy   # ✅ Wait until backend is truly ready
+    networks:
+      - sc_network
+
+networks:
+  sc_network:
+    driver: bridge
