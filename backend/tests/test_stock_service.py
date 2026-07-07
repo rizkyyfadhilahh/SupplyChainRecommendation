@@ -57,11 +57,14 @@ class TestGetStockCandidateProducts:
         candidates = get_stock_candidate_products("CPO")
         assert "CPO" in candidates
 
-    def test_rbdpo_includes_cpo_fallback(self):
-        # RBDPO → CPO via process_map chain
+    def test_rbdpo_returns_itself_only(self):
+        # RBDPO is in REFINED_PRODUCTS — the function intentionally returns
+        # only ["RBDPO"] without walking the process_map chain, because
+        # refined products are never substituted with their raw input at
+        # the stock allocation layer.
         candidates = get_stock_candidate_products("RBDPO")
         assert "RBDPO" in candidates
-        assert "CPO" in candidates
+        assert len(candidates) == 1
 
     def test_unknown_product_returns_itself(self):
         candidates = get_stock_candidate_products("UNKNOWN_PRODUCT")
@@ -220,4 +223,3 @@ class TestAllocateStock:
         )
         # Should still run without error
         assert "summary" in overview
-</contents>

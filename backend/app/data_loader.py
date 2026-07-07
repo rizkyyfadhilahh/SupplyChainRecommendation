@@ -2,12 +2,17 @@ import logging
 import time
 from typing import Any, Dict
 import pandas as pd
-from threading import Lock
 
 logger = logging.getLogger(__name__)
 
-from app.config import facility_groups
-from app.utils import find_first_existing, read_csv_required, normalize_columns
+from app.config import (
+    facility_groups,
+    get_data_file_path,
+    MASTER_FACILITY_FILENAME,
+    EVENTS_BC_FILENAME,
+    LINKS_BC_FILENAME,
+)
+from app.utils import read_csv_required, normalize_columns
 from app.state import APP_DATA, set_app_data
 from app.database import engine
 from sqlalchemy import text
@@ -27,30 +32,11 @@ def load_application_data() -> Dict[str, Any]:
         for plant in plants:
             plant_to_refinery[str(plant)] = refinery_name
 
-    CACHE_TTL_SECONDS = 300
-    CONFIG_FILE_LOCK = Lock()
-
-    master_facility_path = find_first_existing([
-        "master_facility.csv",
-        "master_facility_new.csv",
-        "**/master_facility.csv",
-        "**/master_facility_new.csv",
-    ])
+    master_facility_path = get_data_file_path(MASTER_FACILITY_FILENAME)
 
     logger.info("Loading events_bc and links_bc")
-    events_path = find_first_existing([
-        "3 month/events_bc_01_Des_24_Feb.csv",
-        "3 month/events_bc_01_Des_24_feb.csv",
-        "**/events_bc_01_Des_24_Feb.csv",
-        "**/events_bc_01_Des_24_feb.csv",
-    ])
-
-    links_path = find_first_existing([
-        "3 month/links_bc_01_Des_24_Feb.csv",
-        "3 month/links_bc_01_Des_24_feb.csv",
-        "**/links_bc_01_Des_24_Feb.csv",
-        "**/links_bc_01_Des_24_feb.csv",
-    ])
+    events_path = get_data_file_path(EVENTS_BC_FILENAME)
+    links_path  = get_data_file_path(LINKS_BC_FILENAME)
 
     master_facility = normalize_columns(
         read_csv_required(master_facility_path, "master_facility")

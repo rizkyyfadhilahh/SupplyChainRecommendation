@@ -12,7 +12,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.config import ALLOWED_ORIGINS
 from app.data_loader import load_application_data
 from app.db_seeder import seed_domain_config_to_sqlite
-from app.config import reload_domain_config
+from app.config import reload_domain_config, validate_data_files
 from app.database import create_performance_indexes
 from app.services.stock_service import ensure_sloc_config_seeded
 from app.services.audit_service import ensure_audit_table
@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        # Validate required data files are present before doing anything else.
+        # Raises EnvironmentError with a clear message if any file is missing.
+        await asyncio.to_thread(validate_data_files)
+
         # Seed domain config to SQLite tables if empty
         await asyncio.to_thread(seed_domain_config_to_sqlite)
         # Reload the configs into memory

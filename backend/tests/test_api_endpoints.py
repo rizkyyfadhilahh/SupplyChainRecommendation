@@ -48,7 +48,12 @@ class TestHealthEndpoints:
 
 class TestAuthGuard:
     def test_trace_requires_api_key(self, client):
-        response = client.post("/api/trace", json={"orders": []})
+        # Send a schema-valid body with no API key.
+        # orders=[] triggers 422 before auth is checked, so we send a real order.
+        response = client.post(
+            "/api/trace",
+            json={"orders": [{"facility": "REF1", "product": "CPO", "quantity": 1000}]},
+        )
         assert response.status_code == 401
 
     def test_sloc_master_requires_api_key(self, client):

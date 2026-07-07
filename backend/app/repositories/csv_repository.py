@@ -4,10 +4,15 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from app.config import TEMP_DIR
+from app.config import (
+    TEMP_DIR,
+    get_data_file_path,
+    TRANS_MB51_FILENAME,
+    RESTAN_MB51_FILENAME,
+    SLOC_EUDR_CONFIG_FILENAME,
+)
 from app.utils import (
     bool_from_any,
-    find_first_existing,
     normalize_columns,
     read_csv_required,
 )
@@ -26,16 +31,10 @@ def is_hidden_sloc(value: Any) -> bool:
 
 
 def get_stock_snapshot() -> Optional[str]:
-    trans_path = find_first_existing([
-        "**/trans_mb51_ds*.csv",
-        "**/trans_mb51*.csv",
-    ])
-    restan_path = find_first_existing([
-        "**/restan_mb51_ds*.csv",
-        "**/restan_mb51*.csv",
-    ])
-
-    if not trans_path or not restan_path:
+    try:
+        trans_path  = get_data_file_path(TRANS_MB51_FILENAME)
+        restan_path = get_data_file_path(RESTAN_MB51_FILENAME)
+    except EnvironmentError:
         return None
 
     trans = normalize_columns(read_csv_required(trans_path, "trans_mb51"))
@@ -73,16 +72,10 @@ def _read_csv_slim(path: str, usecols: list, label: str) -> pd.DataFrame:
 
 
 def load_stock_snapshot(events_bc: pd.DataFrame) -> pd.DataFrame:
-    trans_path = find_first_existing([
-        "**/trans_mb51_ds*.csv",
-        "**/trans_mb51*.csv",
-    ])
-    restan_path = find_first_existing([
-        "**/restan_mb51_ds*.csv",
-        "**/restan_mb51*.csv",
-    ])
-
-    if not trans_path or not restan_path:
+    try:
+        trans_path  = get_data_file_path(TRANS_MB51_FILENAME)
+        restan_path = get_data_file_path(RESTAN_MB51_FILENAME)
+    except EnvironmentError:
         cols = [
             "plant", "name1", "storagelocation", "material",
             "material_type", "materialdescription", "current_stock",
@@ -193,7 +186,7 @@ def load_stock_snapshot(events_bc: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_sloc_eudr_config() -> pd.DataFrame:
-    config_path = os.path.join(TEMP_DIR, "sloc_eudr_config.csv")
+    config_path = os.path.join(TEMP_DIR, SLOC_EUDR_CONFIG_FILENAME)
 
     if not os.path.exists(config_path):
         return pd.DataFrame(
@@ -233,7 +226,7 @@ def load_sloc_eudr_config() -> pd.DataFrame:
 
 
 def save_sloc_eudr_config(cfg: pd.DataFrame) -> None:
-    config_path = os.path.join(TEMP_DIR, "sloc_eudr_config.csv")
+    config_path = os.path.join(TEMP_DIR, SLOC_EUDR_CONFIG_FILENAME)
     out = cfg.copy()
 
     for col in ["eudr_valid_from", "eudr_valid_to"]:

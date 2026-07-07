@@ -4,16 +4,11 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Any, Optional
+from typing import Dict, Any
+
+from app.job_store import get_job_store
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Job Store
-# ---------------------------------------------------------------------------
-# In-memory store sufficient for single-instance deployments.
-# For multi-instance deployments, replace with Redis.
-JOB_STORE: Dict[str, Dict[str, Any]] = {}
 
 # ---------------------------------------------------------------------------
 # Thread pool
@@ -33,22 +28,11 @@ _executor = ThreadPoolExecutor(max_workers=_WORKER_COUNT, thread_name_prefix="sc
 logger.info("Job executor initialised with %d workers", _WORKER_COUNT)
 
 # ---------------------------------------------------------------------------
-# Job TTL cleanup (avoid unbounded growth)
+# Job TTL — completed jobs are kept for this long before eviction.
+# For RedisJobStore the TTL is enforced by Redis itself via EXPIRE;
+# for InMemoryJobStore it is swept on each new job submission.
 # ---------------------------------------------------------------------------
-_JOB_TTL_SECONDS = 3600  # Keep completed jobs for 1 hour
-
-def _evict_stale_jobs() -> None:
-    """Remove completed/failed jobs older than TTL to prevent memory leak."""
-    now = time.time()
-    stale = [
-        jid for jid, meta in list(JOB_STORE.items())
-        if meta.get("status") in ("COMPLETED", "FAILED")
-        and now - meta.get("created_at", now) > _JOB_TTL_SECONDS
-    ]
-    for jid in stale:
-        JOB_STORE.pop(jid, None)
-    if stale:
-        logger.debug("Evicted %d stale jobs", len(stale))
+_JOB_TTL_SECONDS = 3600
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -56,31 +40,40 @@ def _evict_stale_jobs() -> None:
 
 def start_background_task(func, *args) -> str:
     """
-    Submit a function to the thread pool and return a job_id.
-    The caller can poll get_job_status(job_id) to check progress.
+    Submit *func* to the thread pool and return a job_id.
+
+    The caller polls get_job_status(job_id) to check progress.
+    Job state is persisted in the configured JobStore (in-memory by default;
+    Redis when REDIS_URL env var is set).
     """
-    # Evict stale jobs on every submission (cheap, amortised O(1))
-    _evict_stale_jobs()
+    store = get_job_store()
+
+    # Evict stale entries before writing a new one (amortised, cheap).
+    store.evict_stale(_JOB_TTL_SECONDS)
 
     job_id = str(uuid.uuid4())
-    JOB_STORE[job_id] = {
+    store.set(job_id, {
         "status": "PENDING",
         "result": None,
         "error": None,
         "created_at": time.time(),
-    }
+    })
 
     def _done_callback(future):
         try:
             result = future.result()
-            JOB_STORE[job_id]["status"] = "COMPLETED"
-            JOB_STORE[job_id]["result"] = result
-            JOB_STORE[job_id]["finished_at"] = time.time()
+            store.update(job_id, {
+                "status": "COMPLETED",
+                "result": result,
+                "finished_at": time.time(),
+            })
         except Exception as exc:
             logger.exception("Background job %s failed", job_id)
-            JOB_STORE[job_id]["status"] = "FAILED"
-            JOB_STORE[job_id]["error"] = str(exc)
-            JOB_STORE[job_id]["finished_at"] = time.time()
+            store.update(job_id, {
+                "status": "FAILED",
+                "error": str(exc),
+                "finished_at": time.time(),
+            })
 
     loop = asyncio.get_running_loop()
     future = loop.run_in_executor(_executor, func, *args)
@@ -90,5 +83,9 @@ def start_background_task(func, *args) -> str:
 
 
 def get_job_status(job_id: str) -> Dict[str, Any]:
-    """Return the current status dict for job_id, or UNKNOWN if not found."""
-    return JOB_STORE.get(job_id, {"status": "UNKNOWN"})
+    """Return the current status dict for *job_id*.
+
+    Returns ``{"status": "UNKNOWN"}`` if the job does not exist in the store.
+    Works correctly across multiple Uvicorn workers when RedisJobStore is active.
+    """
+    return get_job_store().get(job_id)
