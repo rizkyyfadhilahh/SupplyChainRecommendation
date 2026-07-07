@@ -8,6 +8,12 @@ from typing import Dict, Any
 
 from app.job_store import get_job_store
 
+try:
+    from app.metrics import TRACE_JOBS_SUBMITTED, TRACE_JOBS_COMPLETED, TRACE_JOBS_FAILED
+    _METRICS_AVAILABLE = True
+except ImportError:
+    _METRICS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -59,6 +65,9 @@ def start_background_task(func, *args) -> str:
         "created_at": time.time(),
     })
 
+    if _METRICS_AVAILABLE:
+        TRACE_JOBS_SUBMITTED.inc()
+
     def _done_callback(future):
         try:
             result = future.result()
@@ -67,6 +76,8 @@ def start_background_task(func, *args) -> str:
                 "result": result,
                 "finished_at": time.time(),
             })
+            if _METRICS_AVAILABLE:
+                TRACE_JOBS_COMPLETED.inc()
         except Exception as exc:
             logger.exception("Background job %s failed", job_id)
             store.update(job_id, {
@@ -74,6 +85,8 @@ def start_background_task(func, *args) -> str:
                 "error": str(exc),
                 "finished_at": time.time(),
             })
+            if _METRICS_AVAILABLE:
+                TRACE_JOBS_FAILED.inc()
 
     loop = asyncio.get_running_loop()
     future = loop.run_in_executor(_executor, func, *args)

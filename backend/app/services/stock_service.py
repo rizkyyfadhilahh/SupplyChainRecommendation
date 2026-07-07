@@ -1,6 +1,12 @@
+import time
 from datetime import datetime
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+
+# Module-level executor shared with job_manager for background cache rebuilds.
+# Single worker is enough — only one rebuild runs at a time.
+_cache_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sloc_rebuild")
 
 import numpy as np
 import pandas as pd
@@ -21,6 +27,12 @@ from app.repositories.csv_repository import (
 )
 from app.utils import bool_from_any, to_date_str
 
+try:
+    from app.metrics import STOCK_ALLOCATION_DURATION, SLOC_CACHE_STALE_SERVED
+    _METRICS_AVAILABLE = True
+except ImportError:
+    _METRICS_AVAILABLE = False
+
 
 sloc_cache_lock = Lock()
 
@@ -30,6 +42,10 @@ SLOC_CACHE: Dict[str, Any] = {
     "base_sloc_master": None,
     "configured_sloc_master": None,
     "last_refresh_at": None,
+    # Stale-while-revalidate tracking
+    "_is_rebuilding": False,       # True while a background rebuild is running
+    "stale_served_count": 0,       # incremented each time stale data is returned
+    "last_rebuild_error": None,    # last exception from a failed background rebuild
 }
 
 def refresh_sloc_cache_with_config(cfg: pd.DataFrame) -> None:
@@ -215,9 +231,55 @@ def ensure_sloc_config_seeded() -> None:
     save_sloc_eudr_config(seeded)
 
 
+def _rebuild_sloc_cache() -> None:
+    """Rebuild the SLOC cache from source data.
+
+    Runs in a background thread via ``_cache_executor``.  On completion
+    (success or failure) the ``_is_rebuilding`` flag is always cleared so
+    the next TTL expiry can trigger a fresh rebuild.
+    """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    try:
+        events_bc_slim = require_app_data("events_bc_slim")
+        snapshot = load_stock_snapshot(events_bc_slim)
+        stock_max_date = get_stock_snapshot()
+        base_sloc_master = build_base_sloc_master_from_snapshot(snapshot)
+        cfg = load_sloc_eudr_config()
+        configured_sloc_master = apply_sloc_config_to_base(base_sloc_master, cfg)
+
+        now = datetime.utcnow()
+        with sloc_cache_lock:
+            SLOC_CACHE["stock_snapshot"]        = snapshot
+            SLOC_CACHE["stock_max_date"]        = stock_max_date
+            SLOC_CACHE["base_sloc_master"]      = base_sloc_master
+            SLOC_CACHE["configured_sloc_master"] = configured_sloc_master
+            SLOC_CACHE["last_refresh_at"]       = now
+            SLOC_CACHE["last_rebuild_error"]    = None
+        _log.info("SLOC cache rebuilt successfully in background.")
+    except Exception as exc:
+        with sloc_cache_lock:
+            SLOC_CACHE["last_rebuild_error"] = str(exc)
+        _log.error("Background SLOC cache rebuild failed: %s", exc, exc_info=True)
+    finally:
+        with sloc_cache_lock:
+            SLOC_CACHE["_is_rebuilding"] = False
+
+
 def get_cached_sloc_master(
     force_refresh: bool = False,
 ) -> Tuple[pd.DataFrame, Optional[str], Optional[str]]:
+    """Return the current SLOC master DataFrame.
+
+    Cache behaviour:
+    - Cold start (cache is None): block until first build completes.
+    - TTL valid: return cached data immediately (zero-copy view).
+    - TTL expired, ``force_refresh=False``: return stale data immediately
+      and submit a background rebuild if one is not already running
+      (stale-while-revalidate pattern — eliminates latency spikes at TTL).
+    - TTL expired, ``force_refresh=True``: block until rebuild completes
+      (used by ``/api/stock-refresh`` which explicitly wants fresh data).
+    """
     # Guard: prevent calls before load_application_data() completes.
     if not get_app_data("app_data_loaded", False):
         raise RuntimeError(
@@ -229,40 +291,50 @@ def get_cached_sloc_master(
 
     with sloc_cache_lock:
         last_refresh_at = SLOC_CACHE["last_refresh_at"]
-        cache_valid = (
-            not force_refresh
-            and SLOC_CACHE["configured_sloc_master"] is not None
+        has_data  = SLOC_CACHE["configured_sloc_master"] is not None
+        ttl_valid = (
+            has_data
             and last_refresh_at is not None
             and (now - last_refresh_at).total_seconds() < CACHE_TTL_SECONDS
         )
 
-        if cache_valid:
-            # Return a view (not a full copy) for read-only callers.
-            # allocate_stock() does its own .copy() before mutating.
+        # ── Fast path: cache is fresh ──────────────────────────────────────
+        if ttl_valid and not force_refresh:
             return (
                 SLOC_CACHE["configured_sloc_master"],
                 SLOC_CACHE["stock_max_date"],
                 last_refresh_at.isoformat(),
             )
 
-        events_bc_slim = require_app_data("events_bc_slim")
-        snapshot = load_stock_snapshot(events_bc_slim)
-        stock_max_date = get_stock_snapshot()
-        base_sloc_master = build_base_sloc_master_from_snapshot(snapshot)
+        # ── Stale-while-revalidate: TTL expired but data exists ───────────
+        if has_data and not force_refresh:
+            # Return stale data immediately so this request is not blocked.
+            stale_df         = SLOC_CACHE["configured_sloc_master"]
+            stale_max_date   = SLOC_CACHE["stock_max_date"]
+            stale_refresh_at = last_refresh_at.isoformat() if last_refresh_at else None
 
-        cfg = load_sloc_eudr_config()
-        configured_sloc_master = apply_sloc_config_to_base(
-            base_sloc_master,
-            cfg,
+                        # Kick off background rebuild only if one is not already running.
+            if not SLOC_CACHE["_is_rebuilding"]:
+                SLOC_CACHE["_is_rebuilding"] = True
+                SLOC_CACHE["stale_served_count"] += 1
+                if _METRICS_AVAILABLE:
+                    SLOC_CACHE_STALE_SERVED.inc()
+                _cache_executor.submit(_rebuild_sloc_cache)
+
+            return stale_df, stale_max_date, stale_refresh_at
+
+    # ── Blocking path: cold start OR force_refresh=True ───────────────────
+    # We intentionally release sloc_cache_lock before calling the rebuild
+    # so readers are not blocked while the blocking rebuild runs.
+    _rebuild_sloc_cache()
+
+    with sloc_cache_lock:
+        last_refresh_at = SLOC_CACHE["last_refresh_at"]
+        return (
+            SLOC_CACHE["configured_sloc_master"],
+            SLOC_CACHE["stock_max_date"],
+            last_refresh_at.isoformat() if last_refresh_at else None,
         )
-
-        SLOC_CACHE["stock_snapshot"] = snapshot
-        SLOC_CACHE["stock_max_date"] = stock_max_date
-        SLOC_CACHE["base_sloc_master"] = base_sloc_master
-        SLOC_CACHE["configured_sloc_master"] = configured_sloc_master
-        SLOC_CACHE["last_refresh_at"] = now
-
-        return configured_sloc_master, stock_max_date, now.isoformat()
 
 
 def is_sloc_eudr_active(row: pd.Series, current_date: pd.Timestamp) -> bool:
@@ -380,10 +452,20 @@ def allocate_stock(
     demand_qty: float,
     current_date: pd.Timestamp,
 ) -> Tuple[Dict[str, Any], pd.DataFrame]:
+    """Allocate stock from *sloc_state* for the given order parameters.
 
-    # ✅ PERFORMANCE: Copy once here so concurrent requests each get
-    # their own mutable state.  Downstream code must NOT copy again.
-    sloc_state = sloc_state.copy()
+    IMPORTANT: This function mutates *sloc_state* in-place (reduces
+    ``current_stock`` for allocated SLOCs).  The caller is responsible
+    for passing a mutable copy so that:
+      - Concurrent requests each operate on their own isolated state.
+            - Sequential orders within one batch see the cumulative effect of
+        previous allocations (i.e. stock consumed by order N is not
+        available to order N+1).
+
+    In ``trace_orders_service`` the single ``.copy()`` at the top of the
+    function satisfies both requirements for the whole batch loop.
+    """
+    _t0 = time.monotonic() if _METRICS_AVAILABLE else None
 
     candidate_products = get_stock_candidate_products(requested_product)
 
@@ -564,7 +646,11 @@ def allocate_stock(
         "ineligible_slocs": ineligible_slocs,
     }
 
+    if _METRICS_AVAILABLE and _t0 is not None:
+        STOCK_ALLOCATION_DURATION.observe(time.monotonic() - _t0)
+
     return stock_overview, sloc_state
+
 
 
 def get_sloc_master_service(facility: Optional[str] = None) -> Dict[str, Any]:

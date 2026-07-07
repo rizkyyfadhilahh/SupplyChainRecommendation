@@ -19,6 +19,12 @@ from app.services.audit_service import ensure_audit_table
 from app.utils import setup_logging, register_exception_handler
 from app.middleware import CorrelationIDMiddleware
 
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    _PROMETHEUS_AVAILABLE = True
+except ImportError:
+    _PROMETHEUS_AVAILABLE = False
+
 # Import routers
 from app.routers import stock_router, trace_router, gap_router, drilldown_router, config_router, system_router
 
@@ -61,6 +67,15 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="Supply Chain Planning API", lifespan=lifespan)
+
+# Prometheus HTTP metrics — exposes /metrics for Prometheus scraping.
+# Gracefully disabled if prometheus-fastapi-instrumentator is not installed.
+if _PROMETHEUS_AVAILABLE:
+    Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/health", "/health/data", "/metrics"],
+    ).instrument(app).expose(app, include_in_schema=False)
 
 # Middlewares
 app.add_middleware(CorrelationIDMiddleware)

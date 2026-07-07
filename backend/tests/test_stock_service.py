@@ -14,10 +14,6 @@ from app.services.stock_service import (
 )
 
 
-# ---------------------------------------------------------------------------
-# normalize_stock_product
-# ---------------------------------------------------------------------------
-
 class TestNormalizeStockProduct:
     def test_cpo_from_material_type(self):
         assert normalize_stock_product("CPO", "") == "CPO"
@@ -48,20 +44,12 @@ class TestNormalizeStockProduct:
         assert result is None
 
 
-# ---------------------------------------------------------------------------
-# get_stock_candidate_products
-# ---------------------------------------------------------------------------
-
 class TestGetStockCandidateProducts:
     def test_cpo_maps_to_cpo(self):
         candidates = get_stock_candidate_products("CPO")
         assert "CPO" in candidates
 
     def test_rbdpo_returns_itself_only(self):
-        # RBDPO is in REFINED_PRODUCTS — the function intentionally returns
-        # only ["RBDPO"] without walking the process_map chain, because
-        # refined products are never substituted with their raw input at
-        # the stock allocation layer.
         candidates = get_stock_candidate_products("RBDPO")
         assert "RBDPO" in candidates
         assert len(candidates) == 1
@@ -71,51 +59,23 @@ class TestGetStockCandidateProducts:
         assert "UNKNOWN_PRODUCT" in candidates
 
 
-# ---------------------------------------------------------------------------
-# is_sloc_eudr_active
-# ---------------------------------------------------------------------------
-
 class TestIsSlocEudrActive:
     def test_active_eudr(self):
-        row = pd.Series({
-            "eudr": True,
-            "eudr_valid_from": datetime(2024, 1, 1),
-            "eudr_valid_to": datetime(2025, 12, 31),
-        })
-        current = pd.Timestamp("2024-06-15")
-        assert is_sloc_eudr_active(row, current) is True
+        row = pd.Series({"eudr": True, "eudr_valid_from": datetime(2024, 1, 1), "eudr_valid_to": datetime(2025, 12, 31)})
+        assert is_sloc_eudr_active(row, pd.Timestamp("2024-06-15")) is True
 
     def test_expired_eudr(self):
-        row = pd.Series({
-            "eudr": True,
-            "eudr_valid_from": datetime(2020, 1, 1),
-            "eudr_valid_to": datetime(2021, 12, 31),
-        })
-        current = pd.Timestamp("2024-06-15")
-        assert is_sloc_eudr_active(row, current) is False
+        row = pd.Series({"eudr": True, "eudr_valid_from": datetime(2020, 1, 1), "eudr_valid_to": datetime(2021, 12, 31)})
+        assert is_sloc_eudr_active(row, pd.Timestamp("2024-06-15")) is False
 
     def test_eudr_false(self):
-        row = pd.Series({
-            "eudr": False,
-            "eudr_valid_from": datetime(2024, 1, 1),
-            "eudr_valid_to": datetime(2025, 12, 31),
-        })
-        current = pd.Timestamp("2024-06-15")
-        assert is_sloc_eudr_active(row, current) is False
+        row = pd.Series({"eudr": False, "eudr_valid_from": datetime(2024, 1, 1), "eudr_valid_to": datetime(2025, 12, 31)})
+        assert is_sloc_eudr_active(row, pd.Timestamp("2024-06-15")) is False
 
     def test_no_date_range(self):
-        row = pd.Series({
-            "eudr": True,
-            "eudr_valid_from": None,
-            "eudr_valid_to": None,
-        })
-        current = pd.Timestamp("2024-06-15")
-        assert is_sloc_eudr_active(row, current) is False
+        row = pd.Series({"eudr": True, "eudr_valid_from": None, "eudr_valid_to": None})
+        assert is_sloc_eudr_active(row, pd.Timestamp("2024-06-15")) is False
 
-
-# ---------------------------------------------------------------------------
-# allocate_stock
-# ---------------------------------------------------------------------------
 
 class TestAllocateStock:
     def _make_sloc_state(self):
@@ -130,27 +90,15 @@ class TestAllocateStock:
             "refinery_group": ["REF1", "REF1", "REF2"],
             "product_code": ["CPO", "CPO", "CPO"],
             "eudr": [True, False, True],
-            "eudr_valid_from": [
-                pd.Timestamp("2024-01-01"),
-                pd.NaT,
-                pd.Timestamp("2024-01-01"),
-            ],
-            "eudr_valid_to": [
-                pd.Timestamp("2025-12-31"),
-                pd.NaT,
-                pd.Timestamp("2025-12-31"),
-            ],
+            "eudr_valid_from": [pd.Timestamp("2024-01-01"), pd.NaT, pd.Timestamp("2024-01-01")],
+            "eudr_valid_to": [pd.Timestamp("2025-12-31"), pd.NaT, pd.Timestamp("2025-12-31")],
         })
 
     def test_fully_fulfilled(self):
         sloc_state = self._make_sloc_state()
         overview, updated = allocate_stock(
-            sloc_state=sloc_state,
-            refinery_group="REF1",
-            requested_product="CPO",
-            spec="ALL",
-            demand_qty=1000.0,
-            current_date=pd.Timestamp("2024-06-15"),
+            sloc_state=sloc_state, refinery_group="REF1", requested_product="CPO",
+            spec="ALL", demand_qty=1000.0, current_date=pd.Timestamp("2024-06-15"),
         )
         assert overview["summary"]["stock_status"] == "FULLY_FULFILLED"
         assert overview["summary"]["fulfilled_from_stock"] == 1000.0
@@ -159,12 +107,8 @@ class TestAllocateStock:
     def test_partially_fulfilled(self):
         sloc_state = self._make_sloc_state()
         overview, updated = allocate_stock(
-            sloc_state=sloc_state,
-            refinery_group="REF1",
-            requested_product="CPO",
-            spec="ALL",
-            demand_qty=9000.0,  # total REF1 stock = 8000
-            current_date=pd.Timestamp("2024-06-15"),
+            sloc_state=sloc_state, refinery_group="REF1", requested_product="CPO",
+            spec="ALL", demand_qty=9000.0, current_date=pd.Timestamp("2024-06-15"),
         )
         assert overview["summary"]["stock_status"] == "PARTIALLY_FULFILLED"
         assert overview["summary"]["fulfilled_from_stock"] == 8000.0
@@ -173,12 +117,8 @@ class TestAllocateStock:
     def test_not_fulfilled_wrong_facility(self):
         sloc_state = self._make_sloc_state()
         overview, updated = allocate_stock(
-            sloc_state=sloc_state,
-            refinery_group="REF_NONEXISTENT",
-            requested_product="CPO",
-            spec="ALL",
-            demand_qty=1000.0,
-            current_date=pd.Timestamp("2024-06-15"),
+            sloc_state=sloc_state, refinery_group="REF_NONEXISTENT", requested_product="CPO",
+            spec="ALL", demand_qty=1000.0, current_date=pd.Timestamp("2024-06-15"),
         )
         assert overview["summary"]["stock_status"] == "NOT_FULFILLED"
         assert overview["summary"]["fulfilled_from_stock"] == 0.0
@@ -186,40 +126,42 @@ class TestAllocateStock:
     def test_eudr_filter_only_picks_eudr_slocs(self):
         sloc_state = self._make_sloc_state()
         overview, updated = allocate_stock(
-            sloc_state=sloc_state,
-            refinery_group="REF1",
-            requested_product="CPO",
-            spec="EUDR",
-            demand_qty=1000.0,
-            current_date=pd.Timestamp("2024-06-15"),
+            sloc_state=sloc_state, refinery_group="REF1", requested_product="CPO",
+            spec="EUDR", demand_qty=1000.0, current_date=pd.Timestamp("2024-06-15"),
         )
-        # Only EUDR-active SLOCs should be selected
         for sloc in overview["selected_slocs"]:
             assert sloc["eudr_label"] is True
 
     def test_stock_state_mutated_correctly(self):
         sloc_state = self._make_sloc_state()
         overview, updated = allocate_stock(
-            sloc_state=sloc_state,
-            refinery_group="REF1",
-            requested_product="CPO",
-            spec="ALL",
-            demand_qty=2000.0,
-            current_date=pd.Timestamp("2024-06-15"),
+            sloc_state=sloc_state, refinery_group="REF1", requested_product="CPO",
+            spec="ALL", demand_qty=2000.0, current_date=pd.Timestamp("2024-06-15"),
         )
-        # Total allocated must match demand
         total_allocated = sum(s["allocated_qty"] for s in overview["selected_slocs"])
         assert total_allocated == 2000.0
 
     def test_zero_quantity_order(self):
         sloc_state = self._make_sloc_state()
         overview, updated = allocate_stock(
-            sloc_state=sloc_state,
-            refinery_group="REF1",
-            requested_product="CPO",
-            spec="ALL",
-            demand_qty=0.001,  # below any stock threshold
-            current_date=pd.Timestamp("2024-06-15"),
+            sloc_state=sloc_state, refinery_group="REF1", requested_product="CPO",
+            spec="ALL", demand_qty=0.001, current_date=pd.Timestamp("2024-06-15"),
         )
-        # Should still run without error
         assert "summary" in overview
+
+    def test_sequential_orders_see_reduced_stock(self):
+        """Stock consumed by order N must not be available to order N+1."""
+        sloc_state = self._make_sloc_state()
+        current_date = pd.Timestamp("2024-06-15")
+        overview1, sloc_state = allocate_stock(
+            sloc_state=sloc_state, refinery_group="REF1", requested_product="CPO",
+            spec="ALL", demand_qty=5000.0, current_date=current_date,
+        )
+        assert overview1["summary"]["fulfilled_from_stock"] == 5000.0
+        overview2, sloc_state = allocate_stock(
+            sloc_state=sloc_state, refinery_group="REF1", requested_product="CPO",
+            spec="ALL", demand_qty=5000.0, current_date=current_date,
+        )
+        assert overview2["summary"]["fulfilled_from_stock"] == 3000.0
+        assert overview2["summary"]["unmet_demand"] == 2000.0
+        assert overview2["summary"]["stock_status"] == "PARTIALLY_FULFILLED"

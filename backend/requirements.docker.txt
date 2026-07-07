@@ -60,3 +60,8 @@ h11==0.16.0
 packaging==26.0
 six==1.17.0
 cachetools          # used by gap_analysis_service & drilldown_service (TTLCache)
+
+# --- Observability ---
+prometheus-fastapi-instrumentator==7.0.2  # auto HTTP metrics + /metrics endpoint
+prometheus-client==0.22.1                 # required by instrumentator
+python-json-logger==2.0.7                 # structured JSON log formatter

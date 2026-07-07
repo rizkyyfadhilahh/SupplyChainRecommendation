@@ -1,0 +1,16 @@
+# Prometheus scrape configuration for Supply Chain Planning API.
+# Used by the optional prometheus service in docker-compose.yml.
+#
+# To activate: uncomment the prometheus + grafana services in docker-compose.yml
+# then run: docker-compose up prometheus grafana
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: supply_chain_api
+    static_configs:
+      - targets:
+          - backend:8000   # internal docker-compose service name
+    metrics_path: /metrics

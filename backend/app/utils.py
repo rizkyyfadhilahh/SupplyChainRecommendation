@@ -11,11 +11,46 @@ from app.config import TEMP_DIR, API_KEY, APP_DEBUG
 
 logger = logging.getLogger(__name__)
 
+
 def setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if APP_DEBUG else logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
+    """Configure application logging.
+
+    When ``python-json-logger`` is installed, emit structured JSON logs
+    suitable for log aggregation (CloudWatch, Datadog, Elastic).
+    Each log record includes ``timestamp``, ``level``, ``logger``,
+    ``message``, and any extra fields passed to the logger.
+
+    Falls back to the previous plain-text format if the package is not
+    installed, so local development and CI remain unaffected.
+    """
+    level = logging.DEBUG if APP_DEBUG else logging.INFO
+
+    try:
+        from pythonjsonlogger.jsonlogger import JsonFormatter
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            JsonFormatter(
+                fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+                datefmt="%Y-%m-%dT%H:%M:%S",
+                rename_fields={
+                    "asctime": "timestamp",
+                    "levelname": "level",
+                    "name": "logger",
+                },
+            )
+        )
+        root = logging.getLogger()
+        root.setLevel(level)
+        # Remove default handlers to avoid duplicate output
+        root.handlers.clear()
+        root.addHandler(handler)
+    except ImportError:
+        # python-json-logger not installed — use plain text (dev/CI fallback)
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        )
 
 
 def register_exception_handler(app) -> None:
